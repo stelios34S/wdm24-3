@@ -3,6 +3,7 @@ import os
 import atexit
 import random
 import uuid
+import threading
 from collections import defaultdict
 
 import redis
@@ -10,7 +11,7 @@ import requests
 
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
-
+from event import Event
 
 DB_ERROR_STR = "DB error"
 REQ_ERROR_STR = "Requests error"
@@ -38,6 +39,85 @@ class OrderValue(Struct):
     user_id: str
     total_cost: int
 
+###Handles all the messaages received back from payment and stock
+def handle_event(event):
+    event_type = event.event_type
+    data = event.data
+####SUCCESFUL PATH
+    if event_type == "PaymentCompleted":
+        # Process payment completion
+        order_id = data["order_id"]
+        # Update order status and publish OrderUpdated event
+        update_order_status(order_id, "completed")
+        ###Send message to client, this may not be a publish event to the channel(as we receive messages back from
+        # the other services and inform the client
+        publish_event("OrderUpdated", {"order_id": order_id, "status": "completed"})
+    elif event_type == "PaymentFailed":
+        order_id = data["order_id"]
+        update_order_status(order_id, "failed")
+        ###Send message to client, this may not be a publish event to the channel(as we receive messages back from
+        # the other services and inform the client
+        publish_event("OrderFailed", {"order_id": order_id, "status": "failed"})
+    elif event_type == "StockAvailable":
+        # Process payment failure
+        order_id = data["order_id"]
+        update_order_status(order_id, "completed")
+
+        ###Send message to client, this may not be a publish event to the channel(as we receive messages back from
+        # the other services and inform the client
+        publish_event("StockUpdated", {"order_id": order_id, "status": "completed"})
+    elif event_type == "StockFailed":
+        # Process payment failure
+        order_id = data["order_id"]
+        update_order_status(order_id, "failed")
+        ###Send message to client, this may not be a publish event to the channel(as we receive messages back from
+        # the other services and inform the client
+        publish_event("OrderFailed", {"order_id": order_id, "status": "failed"})
+
+##########UNSECCESFUL PATH
+#########
+
+#Subscribes to both PAYMENT SERVICE AND STOCK SERVICE
+def subscribe_to_events():
+    pubsub = db.pubsub()
+    pubsub.subscribe('events')
+    app.logger.info("Subscribed to events channel.")
+    for message in pubsub.listen():
+        app.logger.info(f"Received message: {message}")
+        if message['type'] == 'message':
+            event = Event.from_json(message['data'])
+            handle_event(event)
+
+####Publishes only to payment
+def publish_event(event_type, data):
+    event = Event(event_type, data)
+    db.publish('events', event.to_json())
+
+
+def update_order_status(order_id, status):
+    # Update order status in database
+    order_entry = get_order_from_db(order_id)
+    if status == "completed":
+        if order_entry:
+            order_entry.paid = True
+            app.logger.info("Update roder status")
+            try:
+                db.set(order_id, msgpack.encode(order_entry))
+            except redis.exceptions.RedisError:
+                app.logger.error(f"Failed to update order {order_id} status to paid")
+            else:
+                app.logger.info(f"Order {order_id} marked as paid")
+    else:
+        if order_entry:
+            order_entry.paid = False
+            try:
+                db.set(order_id, msgpack.encode(order_entry))
+            except redis.exceptions.RedisError:
+                app.logger.error(f"Failed to update order {order_id} status to paid")
+            else:
+                app.logger.info(f"Order {order_id} marked as unpaid")
+    pass
+
 
 def get_order_from_db(order_id: str) -> OrderValue | None:
     try:
@@ -53,6 +133,7 @@ def get_order_from_db(order_id: str) -> OrderValue | None:
     return entry
 
 
+##call {{BASEURL}}/orders/create/{1} where BASEURL = http://localhost:8000
 @app.post('/create/<user_id>')
 def create_order(user_id: str):
     key = str(uuid.uuid4())
@@ -61,6 +142,9 @@ def create_order(user_id: str):
         db.set(key, value)
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
+
+    ##publishes event
+    publish_event("PaymentCompleted", {"order_id": key, "user_id": user_id, "status": "created"})
     return jsonify({'order_id': key})
 
 
@@ -179,7 +263,11 @@ def checkout(order_id: str):
 
 
 if __name__ == '__main__':
+    subscriber_thread = threading.Thread(target=subscribe_to_events)
+    subscriber_thread.start()
+
     app.run(host="0.0.0.0", port=8000, debug=True)
+
 else:
     gunicorn_logger = logging.getLogger('gunicorn.error')
     app.logger.handlers = gunicorn_logger.handlers
