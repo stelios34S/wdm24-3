@@ -19,6 +19,9 @@ REQ_ERROR_STR = "Requests error"
 GATEWAY_URL = os.environ['GATEWAY_URL']
 
 app = Flask("order-service")
+# Set up the logger
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               port=int(os.environ['REDIS_PORT']),
@@ -49,6 +52,7 @@ def handle_event(event):
         order_id = data["order_id"]
         # Update order status and publish OrderUpdated event
         update_order_status(order_id, "completed")
+        logger.info("HANDLE EVENT")
         ###Send message to client, this may not be a publish event to the channel(as we receive messages back from
         # the other services and inform the client
         publish_event("OrderUpdated", {"order_id": order_id, "status": "completed"})
@@ -81,9 +85,9 @@ def handle_event(event):
 def subscribe_to_events():
     pubsub = db.pubsub()
     pubsub.subscribe('events')
-    app.logger.info("Subscribed to events channel.")
+    logger.info("Subscribed to events channel.")
     for message in pubsub.listen():
-        app.logger.info(f"Received message: {message}")
+        logger.info(f"Received message: {message}")
         if message['type'] == 'message':
             event = Event.from_json(message['data'])
             handle_event(event)
@@ -91,6 +95,7 @@ def subscribe_to_events():
 ####Publishes only to payment
 def publish_event(event_type, data):
     event = Event(event_type, data)
+    logger.info("PUBLISH EVENT")
     db.publish('events', event.to_json())
 
 
