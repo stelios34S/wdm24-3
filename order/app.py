@@ -42,11 +42,28 @@ class OrderValue(Struct):
     user_id: str
     total_cost: int
 
+
+# Subscribes to both PAYMENT SERVICE AND STOCK SERVICE
+def subscribe_to_events():
+    pubsub = db.pubsub()
+    pubsub.subscribe('events')
+    logger.info("Subscribed to events channel.")
+    for message in pubsub.listen():
+        logger.info(f"Received message: {message}")
+        if message['type'] == 'message':
+            event = Event.from_json(message['data'])
+            handle_event(event)
+
+
+subscriber_thread = threading.Thread(target=subscribe_to_events)
+subscriber_thread.start()
+
+
 ###Handles all the messaages received back from payment and stock
 def handle_event(event):
-    event_type = event.event_type
     data = event.data
-####SUCCESFUL PATH
+    event_type = event.event_type
+    ####SUCCESFUL PATH
     if event_type == "PaymentCompleted":
         # Process payment completion
         order_id = data["order_id"]
@@ -78,19 +95,6 @@ def handle_event(event):
         # the other services and inform the client
         publish_event("OrderFailed", {"order_id": order_id, "status": "failed"})
 
-##########UNSECCESFUL PATH
-#########
-
-#Subscribes to both PAYMENT SERVICE AND STOCK SERVICE
-def subscribe_to_events():
-    pubsub = db.pubsub()
-    pubsub.subscribe('events')
-    logger.info("Subscribed to events channel.")
-    for message in pubsub.listen():
-        logger.info(f"Received message: {message}")
-        if message['type'] == 'message':
-            event = Event.from_json(message['data'])
-            handle_event(event)
 
 ####Publishes only to payment
 def publish_event(event_type, data):
@@ -155,7 +159,6 @@ def create_order(user_id: str):
 
 @app.post('/batch_init/<n>/<n_items>/<n_users>/<item_price>')
 def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
-
     n = int(n)
     n_items = int(n_items)
     n_users = int(n_users)
@@ -168,7 +171,7 @@ def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
         value = OrderValue(paid=False,
                            items=[(f"{item1_id}", 1), (f"{item2_id}", 1)],
                            user_id=f"{user_id}",
-                           total_cost=2*item_price)
+                           total_cost=2 * item_price)
         return value
 
     kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(generate_entry())
@@ -268,9 +271,6 @@ def checkout(order_id: str):
 
 
 if __name__ == '__main__':
-    subscriber_thread = threading.Thread(target=subscribe_to_events)
-    subscriber_thread.start()
-
     app.run(host="0.0.0.0", port=8000, debug=True)
 
 else:
