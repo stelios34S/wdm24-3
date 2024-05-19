@@ -9,6 +9,7 @@ from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
 from threading import Thread
 
+
 DB_ERROR_STR = "DB error"
 
 app = Flask("stock-service")
@@ -137,7 +138,10 @@ def handle_order_created(data):
             publish_event('OrderCancelled', {'order_id': data['order_id'], 'item_id': item_id, 'amount': quantity})
             return
         item.stock -= quantity
-        save_item_to_db(item_id, item)
+        try:
+            db.set(item_id, msgpack.encode(item))
+        except redis.exceptions.RedisError:
+            abort(400, DB_ERROR_STR)
     # Publish StockReserved event if all items have enough stock
     publish_event('StockReserved', {'order_id': data['order_id'], 'items': items})
 
@@ -145,7 +149,12 @@ def handle_order_created(data):
 def handle_order_cancelled(data):
     item_id = data['item_id']
     amount = data['amount']
-    add_stock(item_id, amount)
+    item = get_item_from_db(item_id)
+    item.stock += amount
+    try:
+        db.set(item_id, msgpack.encode(item))
+    except redis.exceptions.RedisError:
+        abort(400, DB_ERROR_STR)
 
 
 def listen_to_events():
