@@ -13,7 +13,6 @@ from event import Event
 
 DB_ERROR_STR = "DB error"
 REQ_ERROR_STR = "Requests error"
-GATEWAY_URL = os.environ['GATEWAY_URL']
 
 app = Flask("payment-service")
 
@@ -62,6 +61,7 @@ def subscribe_to_events():
             event = Event.from_json(message['data'])
             handle_event(event)
 
+
 subscriber_thread = threading.Thread(target=subscribe_to_events)
 subscriber_thread.start()
 
@@ -71,16 +71,18 @@ def handle_event(event):
     event_type = event.event_type
     if event_type == "OrderUpdated":
         user_id = data["user_id"]
-        order_id = data["order_id"]
         amount = data["amount"]
-        logger.info(f"Processing OrderUpdated event for order_id: {order_id}")
-        process_payment(user_id, order_id, amount)
+        logger.info(f"Processing OrderUpdated event for user_id: {user_id}")
+        response = remove_credit(user_id, amount)
+        if response.status_code == 200:
+            publish_event("PaymentCompleted", {"order_id": data["order_id"], "user_id": user_id, "amount": amount})
+        else:
+            publish_event("PaymentFailed", {"order_id": data["order_id"], "user_id": user_id, "amount": amount})
     elif event_type == "OrderFailed":
         user_id = data["user_id"]
-        order_id = data["order_id"]
         amount = data["amount"]
-        logger.info(f"Processing OrderFailed event for order_id: {order_id}")
-        rollback_payment(user_id, amount)
+        logger.info(f"Processing OrderFailed event for user_id: {user_id}")
+        add_credit(user_id, amount)  # Rollback payment by adding the credit back
 
 
 def publish_event(event_type, data):
@@ -113,8 +115,7 @@ def create_user():
 def batch_init_users(n: int, starting_money: int):
     n = int(n)
     starting_money = int(starting_money)
-    kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(UserValue(credit=starting_money))
-                                  for i in range(n)}
+    kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(UserValue(credit=starting_money)) for i in range(n)}
     try:
         db.mset(kv_pairs)
     except redis.exceptions.RedisError:
@@ -125,12 +126,7 @@ def batch_init_users(n: int, starting_money: int):
 @app.get('/find_user/<user_id>')
 def find_user(user_id: str):
     user_entry: UserValue = get_user_from_db(user_id)
-    return jsonify(
-        {
-            "user_id": user_id,
-            "credit": user_entry.credit
-        }
-    )
+    return jsonify({"user_id": user_id, "credit": user_entry.credit})
 
 
 @app.post('/add_funds/<user_id>/<amount>')
@@ -145,58 +141,30 @@ def add_credit(user_id: str, amount: int):
     return Response(f"User: {user_id} credit updated to: {user_entry.credit}", status=200)
 
 
-def rollback_payment(user_id: str, amount: int):
-    user_entry: UserValue = get_user_from_db(user_id)
-    user_entry.credit += amount
-    try:
-        db.set(user_id, msgpack.encode(user_entry))
-    except redis.exceptions.RedisError:
-        app.logger.error(f"Failed to rollback payment for user: {user_id}")
+# def rollback_payment(user_id: str, amount: int):
+#     user_entry: UserValue = get_user_from_db(user_id)
+#     user_entry.credit += amount
+#     try:
+#         db.set(user_id, msgpack.encode(user_entry))
+#     except redis.exceptions.RedisError:
+#         app.logger.error(f"Failed to rollback payment for user: {user_id}")
 
 
 @app.post('/pay/<user_id>/<amount>')
-def process_payment(user_id: str, order_id: str, amount: int):
-    app.logger.debug(f"Processing payment of {amount} for user: {user_id}, order: {order_id}")
+def remove_credit(user_id: str, amount: int):
+    app.logger.debug(f"Removing {amount} credit from user: {user_id}")
     user_entry: UserValue = get_user_from_db(user_id)
-    amount = int(amount)
-    if user_entry.credit < amount:
-        abort(400, f"User: {user_id} does not have enough credit!")
-    user_entry.credit -= amount
-
+    # update credit, serialize and update database
+    user_entry.credit -= int(amount)
+    if user_entry.credit < 0:
+        abort(400, f"User: {user_id} credit cannot get reduced below zero!")
     try:
-        # remove credit
         db.set(user_id, msgpack.encode(user_entry))
-
-        # update order status
-        response = send_post_request(f"{GATEWAY_URL}/orders/checkout/{order_id}")
-        if response.status_code != 200:
-            rollback_payment(user_id, amount)
-            raise Exception(REQ_ERROR_STR)
-
-        # successful payment
-        db.set(f"{user_id}:{order_id}", True)
-
-
     except redis.exceptions.RedisError:
-
-        rollback_payment(user_id, amount)
-
         return abort(400, DB_ERROR_STR)
-
-    except Exception as e:
-
-        app.logger.error(f"Failed to update services: {str(e)}")
-
-        return abort(400, str(e))
-
     return Response(f"User: {user_id} credit updated to: {user_entry.credit}", status=200)
 
 
-'''
-To do: 
-/payment/cancel/{user_id}/{order_id}
-/payment/status/{user_id}/{order_id}
-'''
 
 @app.post('/cancel/<user_id>/<order_id>')
 def cancel_payment(user_id: str, order_id: str):
@@ -216,7 +184,6 @@ def payment_status(user_id: str, order_id: str):
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
     return jsonify({"paid": True})
-
 
 
 if __name__ == '__main__':
