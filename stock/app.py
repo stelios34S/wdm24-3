@@ -7,16 +7,18 @@ import redis
 
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
-
+from threading import Thread
 
 DB_ERROR_STR = "DB error"
 
 app = Flask("stock-service")
 
-db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
-                              port=int(os.environ['REDIS_PORT']),
-                              password=os.environ['REDIS_PASSWORD'],
-                              db=int(os.environ['REDIS_DB']))
+db: redis.Redis = redis.Redis(
+    host=os.environ['REDIS_HOST'],
+    port=int(os.environ['REDIS_PORT']),
+    password=os.environ['REDIS_PASSWORD'],
+    db=int(os.environ['REDIS_DB'])
+)
 
 
 def close_db_connection():
@@ -108,6 +110,55 @@ def remove_stock(item_id: str, amount: int):
         return abort(400, DB_ERROR_STR)
     return Response(f"Item: {item_id} stock updated to: {item_entry.stock}", status=200)
 
+
+# Event handling and publishing
+def publish_event(event_type, event_data):
+    event = msgpack.encode({'event_type': event_type, 'data': event_data})
+    db.publish('stock_events', event)
+
+
+def handle_event(event):
+    event_type = event['event_type']
+    data = event['data']
+    if event_type == 'OrderCreated':
+        handle_order_created(data)
+    elif event_type == 'OrderCancelled':
+        handle_order_cancelled(data)
+
+
+def handle_order_created(data):
+    items = data['items']  # List of tuples (item_id, quantity)
+    for item_id, quantity in items:
+        item = get_item_from_db(item_id)
+        if not item:
+            abort(404, f"Item {item_id} not found")
+        if item.stock < quantity:
+            # Not enough stock, publish OrderCancelled event
+            publish_event('OrderCancelled', {'order_id': data['order_id'], 'item_id': item_id, 'amount': quantity})
+            return
+        item.stock -= quantity
+        save_item_to_db(item_id, item)
+    # Publish StockReserved event if all items have enough stock
+    publish_event('StockReserved', {'order_id': data['order_id'], 'items': items})
+
+
+def handle_order_cancelled(data):
+    item_id = data['item_id']
+    amount = data['amount']
+    add_stock(item_id, amount)
+
+
+def listen_to_events():
+    pubsub = db.pubsub()
+    pubsub.subscribe('order_events')
+    for message in pubsub.listen():
+        if message['type'] == 'message':
+            event = msgpack.decode(message['data'])
+            handle_event(event)
+
+
+event_listener_thread = Thread(target=listen_to_events)
+event_listener_thread.start()
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)
