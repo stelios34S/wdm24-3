@@ -111,6 +111,20 @@ def remove_stock(item_id: str, amount: int):
         return abort(400, DB_ERROR_STR)
     return Response(f"Item: {item_id} stock updated to: {item_entry.stock}", status=200)
 
+@app.get('/all_stocks')
+def all_stocks():
+    try:
+        keys = db.keys()
+        stocks = {}
+        for key in keys:
+            entry = db.get(key)
+            if entry:
+                stocks[key.decode('utf-8')] = msgpack.decode(entry, type=StockValue)
+    except redis.exceptions.RedisError:
+        return abort(400, DB_ERROR_STR)
+    return jsonify({key: {"stock": value.stock, "price": value.price} for key, value in stocks.items()})
+
+
 
 # Event handling and publishing
 def publish_event(event_type, event_data):
