@@ -2,16 +2,19 @@ import logging
 import os
 import atexit
 import uuid
+from threading import Thread
 
 import redis
 
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
+from event import Event
 
 DB_ERROR_STR = "DB error"
 
-
 app = Flask("payment-service")
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               port=int(os.environ['REDIS_PORT']),
@@ -32,14 +35,11 @@ class UserValue(Struct):
 
 def get_user_from_db(user_id: str) -> UserValue | None:
     try:
-        # get serialized data
         entry: bytes = db.get(user_id)
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
-    # deserialize data if it exists else return null
     entry: UserValue | None = msgpack.decode(entry, type=UserValue) if entry else None
     if entry is None:
-        # if user does not exist in the database; abort
         abort(400, f"User: {user_id} not found!")
     return entry
 
@@ -82,7 +82,6 @@ def find_user(user_id: str):
 @app.post('/add_funds/<user_id>/<amount>')
 def add_credit(user_id: str, amount: int):
     user_entry: UserValue = get_user_from_db(user_id)
-    # update credit, serialize and update database
     user_entry.credit += int(amount)
     try:
         db.set(user_id, msgpack.encode(user_entry))
@@ -95,7 +94,6 @@ def add_credit(user_id: str, amount: int):
 def remove_credit(user_id: str, amount: int):
     app.logger.debug(f"Removing {amount} credit from user: {user_id}")
     user_entry: UserValue = get_user_from_db(user_id)
-    # update credit, serialize and update database
     user_entry.credit -= int(amount)
     if user_entry.credit < 0:
         abort(400, f"User: {user_id} credit cannot get reduced below zero!")
@@ -103,7 +101,54 @@ def remove_credit(user_id: str, amount: int):
         db.set(user_id, msgpack.encode(user_entry))
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
+    publish_event("PaymentCompleted", {"order_id": request.json["order_id"], "user_id": user_id})
     return Response(f"User: {user_id} credit updated to: {user_entry.credit}", status=200)
+
+
+def publish_event(event_type, data):
+    event = Event(event_type, data)
+    logger.info(f"Publishing event: {event.to_json()}")
+    db.publish('payment_events', event.to_json())
+
+
+def handle_event(event):
+    data = event.data
+    event_type = event.event_type
+    if event_type == "OrderPayment":
+        handle_order_payment(data)
+
+
+def handle_order_payment(data):
+    user_id = data["user_id"]
+    order_id = data["order_id"]
+    amount = data["amount"]
+    user_entry = get_user_from_db(user_id)
+    if user_entry.credit >= amount:
+        user_entry.credit -= amount
+        try:
+            db.set(user_id, msgpack.encode(user_entry))
+        except redis.exceptions.RedisError:
+            logger.error(f"Failed to update user {user_id} credit")
+        else:
+            logger.info(f"User {user_id} credit deducted by {amount}")
+            publish_event("PaymentCompleted", {"order_id": order_id, "user_id": user_id})
+    else:
+        logger.info(f"User {user_id} out of credit")
+        publish_event("PaymentFailed", {"order_id": order_id, "user_id": user_id})
+
+
+def subscribe_to_events():
+    pubsub = db.pubsub()
+    pubsub.subscribe('order_events')
+    logger.info("Subscribed to order_events channel.")
+    for message in pubsub.listen():
+        if message['type'] == 'message':
+            event = Event.from_json(message['data'])
+            handle_event(event)
+
+
+subscriber_thread = Thread(target=subscribe_to_events)
+subscriber_thread.start()
 
 
 if __name__ == '__main__':
