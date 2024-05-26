@@ -145,7 +145,7 @@ def handle_order_created(data):
         if not item:
             abort(404, f"Item {item_id} not found")
         if item.stock < quantity:
-            publish_event('OrderCancelled', {'order_id': data['order_id'], 'item_id': item_id, 'amount': quantity})
+            publish_event('StockFailed', {'order_id': data['order_id'], 'item_id': item_id, 'amount': quantity})
             return
         item.stock -= quantity
         try:

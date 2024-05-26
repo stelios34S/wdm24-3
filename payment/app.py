@@ -62,10 +62,6 @@ def subscribe_to_events():
             handle_event(event)
 
 
-subscriber_thread = threading.Thread(target=subscribe_to_events)
-subscriber_thread.start()
-
-
 def handle_event(event):
     data = event.data
     event_type = event.event_type
@@ -88,7 +84,7 @@ def handle_event(event):
 def publish_event(event_type, data):
     event = Event(event_type, data)
     logger.info("Publishing event")
-    db.publish('order-events', event.to_json())
+    db.publish('payment_events', event.to_json())
 
 
 def send_post_request(url: str):
@@ -184,6 +180,11 @@ def payment_status(user_id: str, order_id: str):
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
     return jsonify({"paid": True})
+
+
+
+subscriber_thread = threading.Thread(target=subscribe_to_events)
+subscriber_thread.start()
 
 
 if __name__ == '__main__':
