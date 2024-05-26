@@ -67,7 +67,6 @@ def create_order(user_id: str):
 
 @app.post('/batch_init/<n>/<n_items>/<n_users>/<item_price>')
 def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
-
     n = int(n)
     n_items = int(n_items)
     n_users = int(n_users)
@@ -80,7 +79,7 @@ def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
         value = OrderValue(paid=False,
                            items=[(f"{item1_id}", 1), (f"{item2_id}", 1)],
                            user_id=f"{user_id}",
-                           total_cost=2*item_price)
+                           total_cost=2 * item_price)
         return value
 
     kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(generate_entry())
@@ -182,7 +181,7 @@ def publish_event(event_type, data):
 def handle_event(event):
     data = event.data
     event_type = event.event_type
-    if event_type == "PaymentCompleted":
+    if event_type == "PaymentSuccessful":
         handle_payment_completed(data)
     elif event_type == "PaymentFailed":
         handle_payment_failed(data)
@@ -190,6 +189,8 @@ def handle_event(event):
         handle_stock_reserved(data)
     elif event_type == "StockFailed":
         handle_stock_failed(data)
+    elif event_type == "RefundIssued":
+        handle_refund_issued(data)
 
 
 def handle_payment_completed(data):
@@ -203,7 +204,9 @@ def handle_payment_completed(data):
             logger.error(f"Failed to update order {order_id} status to paid")
         else:
             logger.info(f"Order {order_id} marked as paid")
-        publish_event("OrderCompleted", {"order_id": order_id})
+    # Inform the user and update the order status, no event to publish
+    # Here you can add code to inform the user
+    # e.g., send an email or update order status in a UI
 
 
 def handle_payment_failed(data):
@@ -211,21 +214,32 @@ def handle_payment_failed(data):
     order_entry = get_order_from_db(order_id)
     if order_entry:
         logger.info(f"Order {order_id} payment failed")
-    publish_event("OrderFailed", {"order_id": order_id})
+        # Inform the user about the payment failure
+        # e.g., send an email or update order status in a UI
 
 
 def handle_stock_reserved(data):
     order_id = data["order_id"]
-    publish_event("OrderPayment", {"order_id": order_id, "user_id": data["user_id"], "amount": data["total_cost"]})
+    logger.info(f"Stock reserved for order {order_id}")
+    order_entry = get_order_from_db(order_id)
+    if order_entry.paid:
+        try:
+            db.set(order_id, msgpack.encode(order_entry))
+        except redis.exceptions.RedisError:
+            logger.error(f"Failed to update order {order_id} status to paid")
+        else:
+            logger.info(f"Order {order_id} marked as paid")
 
 
 def handle_stock_failed(data):
     order_id = data["order_id"]
-    order_entry = get_order_from_db(order_id)
-    if order_entry:
-        logger.info(f"Order {order_id} stock reservation failed")
-    publish_event("OrderFailed", {"order_id": order_id})
+    logger.info(f"Order {order_id} stock reservation failed")
+    publish_event("IssueRefund", {"order_id": order_id, "user_id": data["user_id"], "amount": data["total_cost"]})
 
+def handle_refund_issued(data):
+    order_id = data["order_id"]
+    logger.info(f"Refund issued for order {order_id}")
+    # Inform the user about the refund
 
 def subscribe_to_events():
     pubsub = db.pubsub()
@@ -239,7 +253,6 @@ def subscribe_to_events():
 
 subscriber_thread = Thread(target=subscribe_to_events)
 subscriber_thread.start()
-
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)

@@ -53,7 +53,7 @@ def get_user_from_db(user_id: str) -> UserValue | None:
 
 def subscribe_to_events():
     pubsub = db.pubsub()
-    pubsub.subscribe('order-events')
+    pubsub.subscribe('order_events')
     logger.info("Subscribed to order-events channel.")
     for message in pubsub.listen():
         logger.info(f"Received message: {message}")
@@ -65,21 +65,41 @@ def subscribe_to_events():
 def handle_event(event):
     data = event.data
     event_type = event.event_type
-    if event_type == "OrderPayment":
-        user_id = data["user_id"]
-        amount = data["amount"]
-        logger.info(f"Processing OrderUpdated event for user_id: {user_id}")
-        response = remove_credit(user_id, amount)
-        if response.status_code == 200:
-            publish_event("PaymentCompleted", {"order_id": data["order_id"], "user_id": user_id, "amount": amount})
-        else:
-            publish_event("PaymentFailed", {"order_id": data["order_id"], "user_id": user_id, "amount": amount})
-    elif event_type == "OrderFailed":
-        user_id = data["user_id"]
-        amount = data["amount"]
-        logger.info(f"Processing OrderFailed event for user_id: {user_id}")
-        add_credit(user_id, amount)  # Rollback payment by adding the credit back
+    if event_type == "OrderCreated":
+        handle_order_created(data)
+    elif event_type == "IssueRefund":
+        handle_issue_refund(data)
 
+
+def handle_order_created(data):
+    order_id = data["order_id"]
+    user_id = data["user_id"]
+    amount = data["total_cost"]
+    logger.info(f"Processing OrderCreated event for order_id: {order_id}")
+    user_entry = get_user_from_db(user_id)
+    if user_entry and user_entry.credit >= amount:
+        user_entry.credit -= amount
+        try:
+            db.set(user_id, msgpack.encode(user_entry))
+            publish_event("PaymentSuccessful", {"order_id": order_id, "user_id": user_id, "total_cost": amount})
+        except redis.exceptions.RedisError:
+            publish_event("PaymentFailed", {"order_id": order_id})
+    else:
+        publish_event("PaymentFailed", {"order_id": order_id})
+
+def handle_issue_refund(data):
+    order_id = data["order_id"]
+    user_id = data["user_id"]
+    amount = data["amount"]
+    logger.info(f"Issuing refund for order_id: {order_id}")
+    user_entry = get_user_from_db(user_id)
+    if user_entry:
+        user_entry.credit += amount
+        try:
+            db.set(user_id, msgpack.encode(user_entry))
+            publish_event("RefundIssued", {"order_id": order_id})
+        except redis.exceptions.RedisError:
+            logger.error(f"Failed to issue refund for order {order_id}")
 
 def publish_event(event_type, data):
     event = Event(event_type, data)
