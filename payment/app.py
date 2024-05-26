@@ -3,7 +3,9 @@ import os
 import atexit
 import uuid
 import requests
-import threading
+from threading import Thread
+from queue import Queue
+
 
 import redis
 
@@ -25,7 +27,7 @@ db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               password=os.environ['REDIS_PASSWORD'],
                               db=int(os.environ['REDIS_DB']))
 
-
+event_queue = Queue()
 def close_db_connection():
     db.close()
 
@@ -51,15 +53,7 @@ def get_user_from_db(user_id: str) -> UserValue | None:
     return entry
 
 
-def subscribe_to_events():
-    pubsub = db.pubsub()
-    pubsub.subscribe('order_events')
-    logger.info("Subscribed to order-events channel.")
-    for message in pubsub.listen():
-        logger.info(f"Received message: {message}")
-        if message['type'] == 'message':
-            event = Event.from_json(message['data'])
-            handle_event(event)
+
 
 
 def handle_event(event):
@@ -203,8 +197,31 @@ def payment_status(user_id: str, order_id: str):
 
 
 
-subscriber_thread = threading.Thread(target=subscribe_to_events)
+def process_event_queue():
+    while True:
+        event = event_queue.get()
+        handle_event(event)
+        event_queue.task_done()
+
+def subscribe_to_events():
+    pubsub = db.pubsub()
+    pubsub.subscribe('order_events')
+    logger.info("Subscribed to order-events channel.")
+    for message in pubsub.listen():
+        logger.info(f"Received message: {message}")
+        if message['type'] == 'message':
+            event = Event.from_json(message['data'])
+            event_queue.put(event)
+# Start a few worker threads
+for i in range(5):
+    worker = Thread(target=process_event_queue)
+    worker.daemon = True
+    worker.start()
+
+subscriber_thread = Thread(target=subscribe_to_events)
 subscriber_thread.start()
+
+
 
 
 if __name__ == '__main__':

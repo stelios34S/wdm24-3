@@ -2,7 +2,8 @@ import logging
 import os
 import atexit
 import uuid
-import threading
+from threading import Thread
+from queue import Queue
 
 import redis
 
@@ -23,7 +24,7 @@ db: redis.Redis = redis.Redis(
     db=int(os.environ['REDIS_DB'])
 )
 
-
+event_queue = Queue()
 def close_db_connection():
     db.close()
 
@@ -172,10 +173,21 @@ def listen_to_events():
     for message in pubsub.listen():
         if message['type'] == 'message':
             event = Event.from_json(message['data'])
-            handle_event(event)
+            event_queue.put(event)
 
+def process_event_queue():
+    while True:
+        event = event_queue.get()
+        handle_event(event)
+        event_queue.task_done()
 
-event_listener_thread = threading.Thread(target=listen_to_events)
+# Start a few worker threads
+for i in range(5):
+    worker = Thread(target=process_event_queue)
+    worker.daemon = True
+    worker.start()
+
+event_listener_thread = Thread(target=listen_to_events)
 event_listener_thread.start()
 
 

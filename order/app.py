@@ -5,7 +5,7 @@ import random
 import uuid
 from collections import defaultdict
 from threading import Thread
-
+from queue import Queue
 import redis
 import requests
 
@@ -27,7 +27,7 @@ db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               password=os.environ['REDIS_PASSWORD'],
                               db=int(os.environ['REDIS_DB']))
 
-
+event_queue = Queue()
 def close_db_connection():
     db.close()
 
@@ -248,8 +248,22 @@ def subscribe_to_events():
     for message in pubsub.listen():
         if message['type'] == 'message':
             event = Event.from_json(message['data'])
-            handle_event(event)
+            event_queue.put(event)
 
+
+
+
+
+def process_event_queue():
+    while True:
+        event = event_queue.get()
+        handle_event(event)
+        event_queue.task_done()
+# Start a few worker threads
+for i in range(5):
+    worker = Thread(target=process_event_queue)
+    worker.daemon = True
+    worker.start()
 
 subscriber_thread = Thread(target=subscribe_to_events)
 subscriber_thread.start()
