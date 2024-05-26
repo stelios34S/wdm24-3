@@ -65,7 +65,7 @@ def subscribe_to_events():
 def handle_event(event):
     data = event.data
     event_type = event.event_type
-    if event_type == "OrderUpdated":
+    if event_type == "OrderPayment":
         user_id = data["user_id"]
         amount = data["amount"]
         logger.info(f"Processing OrderUpdated event for user_id: {user_id}")

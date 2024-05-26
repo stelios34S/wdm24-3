@@ -168,7 +168,7 @@ def handle_order_cancelled(data):
 
 def listen_to_events():
     pubsub = db.pubsub()
-    pubsub.subscribe('stock_events')
+    pubsub.subscribe('payment_events')
     logger.info("Subscribed to stock_events channel.")
     for message in pubsub.listen():
         if message['type'] == 'message':
