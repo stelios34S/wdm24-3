@@ -2,7 +2,10 @@ import logging
 import os
 import atexit
 import random
+from threading import Thread
 import uuid
+from event import Event
+from queue import Queue
 from collections import defaultdict
 
 import redis
@@ -18,19 +21,32 @@ REQ_ERROR_STR = "Requests error"
 GATEWAY_URL = os.environ['GATEWAY_URL']
 
 app = Flask("order-service")
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               port=int(os.environ['REDIS_PORT']),
                               password=os.environ['REDIS_PASSWORD'],
                               db=int(os.environ['REDIS_DB']))
 
-
+event_queue = Queue()
 def close_db_connection():
     db.close()
 
+def subscribe_to_events():
+    pubsub = db.pubsub()
+    pubsub.subscribe(['payment_events', 'stock_events'])
+    logger.info("Subscribed to payment_events and stock_events channels.")
+    for message in pubsub.listen():
+        if message['type'] == 'message':
+            event = Event.from_json(message['data'])
+            event_queue.put(event)
+
+subscriber_thread = Thread(target=subscribe_to_events)
+subscriber_thread.start()
+
 
 atexit.register(close_db_connection)
-
 
 class OrderValue(Struct):
     paid: bool
@@ -59,6 +75,7 @@ def create_order(user_id: str):
     value = msgpack.encode(OrderValue(paid=False, items=[], user_id=user_id, total_cost=0))
     try:
         db.set(key, value)
+        logger.info(f"Order created: {key}, for user {user_id}")
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
     return jsonify({'order_id': key})
@@ -135,6 +152,7 @@ def add_item(order_id: str, item_id: str, quantity: int):
     order_entry.total_cost += int(quantity) * item_json["price"]
     try:
         db.set(order_id, msgpack.encode(order_entry))
+        logger.info(f"Item: {item_id} added to: {order_id} price updated to: {order_entry.total_cost}")
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
     return Response(f"Item: {item_id} added to: {order_id} price updated to: {order_entry.total_cost}",
@@ -148,34 +166,87 @@ def rollback_stock(removed_items: list[tuple[str, int]]):
 
 @app.post('/checkout/<order_id>')
 def checkout(order_id: str):
-    app.logger.debug(f"Checking out {order_id}")
+    logger.debug(f"Checking out {order_id}")
     order_entry: OrderValue = get_order_from_db(order_id)
-    # get the quantity per item
-    items_quantities: dict[str, int] = defaultdict(int)
-    for item_id, quantity in order_entry.items:
-        items_quantities[item_id] += quantity
-    # The removed items will contain the items that we already have successfully subtracted stock from
-    # for rollback purposes.
-    removed_items: list[tuple[str, int]] = []
-    for item_id, quantity in items_quantities.items():
-        stock_reply = send_post_request(f"{GATEWAY_URL}/stock/subtract/{item_id}/{quantity}")
-        if stock_reply.status_code != 200:
-            # If one item does not have enough stock we need to rollback
-            rollback_stock(removed_items)
-            abort(400, f'Out of stock on item_id: {item_id}')
-        removed_items.append((item_id, quantity))
-    user_reply = send_post_request(f"{GATEWAY_URL}/payment/pay/{order_entry.user_id}/{order_entry.total_cost}")
-    if user_reply.status_code != 200:
-        # If the user does not have enough credit we need to rollback all the item stock subtractions
-        rollback_stock(removed_items)
-        abort(400, "User out of credit")
+    publish_event('ProcessPayment', {
+        'order_id': order_id,
+        'user_id': order_entry.user_id,
+        'total_cost': order_entry.total_cost
+    })
+    logger.info("Checkout initiated")
+    return Response("Checkout initiated", status=200)
+
+
+def publish_event(event_type, data):
+    event = Event(event_type, data)
+    test = db.publish('order_events', event.to_json())
+    channels_subs = db.pubsub_channels()
+    logger.info(f"Publishing event: {event.to_json()}")
+    logger.info(f"Delivers: {channels_subs}")
+
+
+def handle_event(event):
+    data = event.data
+    event_type = event.event_type
+    if event_type == "PaymentSuccessful":
+        handle_payment_successful(data)
+    elif event_type == "PaymentFailed":
+        handle_payment_failed(data)
+    elif event_type == "StockReserved":
+        handle_stock_reserved(data)
+    elif event_type == "StockFailed":
+        handle_stock_failed(data)
+
+
+def handle_payment_successful(data):
+    order_id = data['order_id']
+    order_entry: OrderValue = get_order_from_db(order_id)
     order_entry.paid = True
     try:
         db.set(order_id, msgpack.encode(order_entry))
+        logger.info(f"Payment successful for order {order_id}")
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
-    app.logger.debug("Checkout successful")
+
+def handle_payment_failed(data):
+    order_id = data['order_id']
+    order_entry: OrderValue = get_order_from_db(order_id)
+    order_entry.paid = False
+    try:
+        db.set(order_id, msgpack.encode(order_entry))
+        logger.info(f"Payment failed for order {order_id}")
+    except redis.exceptions.RedisError:
+        return abort(400, DB_ERROR_STR)
+
+def handle_stock_reserved(data):
+    order_id = data['order_id']
+    logger.debug(f"Checkout successful for order {order_id}")
     return Response("Checkout successful", status=200)
+
+def handle_stock_failed(data):
+    order_id = data['order_id']
+    order_entry: OrderValue = get_order_from_db(order_id)
+    publish_event('IssueRefund', {
+        'order_id': order_id,
+        'user_id': order_entry.user_id,
+        'total_cost': order_entry.total_cost
+    })
+    logger.info(f"Stock failed for order: {order_id}")
+
+
+
+def process_event_queue():
+    while True:
+        event = event_queue.get()
+        handle_event(event)
+        event_queue.task_done()
+
+# Start a few worker threads
+for i in range(5):
+    worker = Thread(target=process_event_queue)
+    worker.daemon = True
+    worker.start()
+
 
 
 if __name__ == '__main__':
