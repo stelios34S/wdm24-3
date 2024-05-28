@@ -2,17 +2,17 @@ import logging
 import os
 import atexit
 import random
+import json
 from threading import Thread
 import uuid
-from event import Event
 from queue import Queue
-from collections import defaultdict
 
 import redis
 import requests
 
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
+from rabbitmq_utils import publish_event, start_subscriber
 
 
 DB_ERROR_STR = "DB error"
@@ -33,17 +33,19 @@ event_queue = Queue()
 def close_db_connection():
     db.close()
 
-def subscribe_to_events():
-    pubsub = db.pubsub()
-    pubsub.subscribe(['payment_events', 'stock_events'])
-    logger.info("Subscribed to payment_events and stock_events channels.")
-    for message in pubsub.listen():
-        if message['type'] == 'message':
-            event = Event.from_json(message['data'])
-            event_queue.put(event)
 
-subscriber_thread = Thread(target=subscribe_to_events)
-subscriber_thread.start()
+
+# def subscribe_to_events():
+#     pubsub = db.pubsub()
+#     pubsub.subscribe(['payment_events', 'stock_events'])
+#     logger.info("Subscribed to payment_events and stock_events channels.")
+#     for message in pubsub.listen():
+#         if message['type'] == 'message':
+#             event = Event.from_json(message['data'])
+#             event_queue.put(event)
+#
+# subscriber_thread = Thread(target=subscribe_to_events)
+# subscriber_thread.start()
 
 
 atexit.register(close_db_connection)
@@ -168,7 +170,7 @@ def rollback_stock(removed_items: list[tuple[str, int]]):
 def checkout(order_id: str):
     logger.debug(f"Checking out {order_id}")
     order_entry: OrderValue = get_order_from_db(order_id)
-    publish_event('ProcessPayment', {
+    publish_event('order_events', 'ProcessPayment', {
         'order_id': order_id,
         'user_id': order_entry.user_id,
         'total_cost': order_entry.total_cost
@@ -177,24 +179,45 @@ def checkout(order_id: str):
     return Response("Checkout initiated", status=200)
 
 
-def publish_event(event_type, data):
-    event = Event(event_type, data)
-    test = db.publish('order_events', event.to_json())
-    channels_subs = db.pubsub_channels()
-    logger.info(f"Publishing event: {event.to_json()}")
-    logger.info(f"Delivers: {channels_subs}")
+# def publish_event(event_type, data):
+#     event = Event(event_type, data)
+#     test = db.publish('order_events', event.to_json())
+#     channels_subs = db.pubsub_channels()
+#     logger.info(f"Publishing event: {event.to_json()}")
+
+# def publish_event(event_type, data):
+#     event = {'type': event_type, 'data': data}
+#     channel.basic_publish(
+#         exchange='events',
+#         routing_key=event_type,
+#         body=json.dumps(event)
+#     )
+#     print(f"Published event: {event}")
 
 
-def handle_event(event):
-    data = event.data
-    event_type = event.event_type
-    if event_type == "PaymentSuccessful":
+# def handle_event(event):
+#     data = event.data
+#     event_type = event.event_type
+#     if event_type == "PaymentSuccessful":
+#         handle_payment_successful(data)
+#     elif event_type == "PaymentFailed":
+#         handle_payment_failed(data)
+#     elif event_type == "StockReserved":
+#         handle_stock_reserved(data)
+#     elif event_type == "StockFailed":
+#         handle_stock_failed(data)
+
+def process_event(ch, method, properties, body):
+    event = json.loads(body)
+    event_type = event['type']
+    data = event['data']
+    if event_type == 'PaymentSuccessful':
         handle_payment_successful(data)
-    elif event_type == "PaymentFailed":
+    elif event_type == 'PaymentFailed':
         handle_payment_failed(data)
-    elif event_type == "StockReserved":
+    elif event_type == 'StockReserved':
         handle_stock_reserved(data)
-    elif event_type == "StockFailed":
+    elif event_type == 'StockFailed':
         handle_stock_failed(data)
 
 
@@ -226,31 +249,41 @@ def handle_stock_reserved(data):
 def handle_stock_failed(data):
     order_id = data['order_id']
     order_entry: OrderValue = get_order_from_db(order_id)
-    publish_event('IssueRefund', {
+    publish_event('order_events', 'IssueRefund', {
         'order_id': order_id,
         'user_id': order_entry.user_id,
         'total_cost': order_entry.total_cost
     })
     logger.info(f"Stock failed for order: {order_id}")
 
-
-
-def process_event_queue():
-    while True:
-        event = event_queue.get()
-        handle_event(event)
-        event_queue.task_done()
-
-# Start a few worker threads
-for i in range(5):
-    worker = Thread(target=process_event_queue)
-    worker.daemon = True
-    worker.start()
-
+# def start_subscriber():
+#     channel.queue_declare(queue='order_queue')
+#     channel.queue_bind(exchange='events', queue='order_queue', routing_key='order_created')
+#
+#     # channel.basic_consume(queue='order_queue', on_message_callback=callback, auto_ack=True)
+#     # print('Waiting for messages. To exit press CTRL+C')
+#     # channel.start_consuming()
+#
+# def process_event_queue():
+#     while True:
+#         event = event_queue.get()
+#         handle_event(event)
+#         event_queue.task_done()
+#
+# # Start a few worker threads
+# for i in range(5):
+#     worker = Thread(target=process_event_queue)
+#     worker.daemon = True
+#     worker.start()
+#
 
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)
+    subscriber_thread = Thread(target=start_subscriber, args=('payment_events', process_event))
+    subscriber_thread.start()
+    subscriber_thread = Thread(target=start_subscriber, args=('stock_events', process_event))
+    subscriber_thread.start()
 else:
     gunicorn_logger = logging.getLogger('gunicorn.error')
     app.logger.handlers = gunicorn_logger.handlers

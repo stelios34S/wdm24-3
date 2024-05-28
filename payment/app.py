@@ -1,15 +1,14 @@
 import logging
-import time
 import os
 import atexit
 from threading import Thread
+import json
 import uuid
-from event import Event
 import redis
-from queue import Queue
 
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
+from rabbitmq_utils import publish_event, start_subscriber
 
 DB_ERROR_STR = "DB error"
 
@@ -23,26 +22,26 @@ db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               password=os.environ['REDIS_PASSWORD'],
                               db=int(os.environ['REDIS_DB']))
 
-pubsub = db.pubsub()
-pubsub.subscribe('order_events')
-
-logger.info(db.pubsub_channels())
+# pubsub = db.pubsub()
+# pubsub.subscribe('order_events')
+#
+# logger.info(db.pubsub_channels())
 def close_db_connection():
     db.close()
 
 # event_queue = Queue()
 
-def subscribe_to_events():
-    logger.info("Subscribed to order-events channel.")
-    for message in pubsub.listen():
-        logger.info(f"Received message: {message}")
-        if message['type'] != 'subscribe':
-            event = Event.from_json(message['data'])
-            handle_event(event)
+# def subscribe_to_events():
+#     logger.info("Subscribed to order-events channel.")
+#     for message in pubsub.listen():
+#         logger.info(f"Received message: {message}")
+#         if message['type'] != 'subscribe':
+#             event = Event.from_json(message['data'])
+#             handle_event(event)
 
 
-subscriber_thread = Thread(target=subscribe_to_events)
-subscriber_thread.start()
+# subscriber_thread = Thread(target=subscribe_to_events)
+# subscriber_thread.start()
 
 
 atexit.register(close_db_connection)
@@ -50,10 +49,10 @@ atexit.register(close_db_connection)
 class UserValue(Struct):
     credit: int
 
-def publish_event(event_type, data):
-    event = Event(event_type, data)
-    logger.info(f"Publishing event: {event.to_json()}")
-    db.publish('payment_events', event.to_json())
+# def publish_event(event_type, data):
+#     event = Event(event_type, data)
+#     logger.info(f"Publishing event: {event.to_json()}")
+#     db.publish('payment_events', event.to_json())
 
 
 def get_user_from_db(user_id: str) -> UserValue | None:
@@ -143,14 +142,14 @@ def handle_process_payment(data):
             db.set(user_id, msgpack.encode(user_entry))
         except redis.exceptions.RedisError:
             return abort(400, DB_ERROR_STR)
-        publish_event('PaymentSuccessful', {
+        publish_event('payment_events', 'PaymentSuccessful', {
             'order_id': order_id,
             'user_id': user_id,
             'items': data['items'],
         })
         logger.info(f"Payment successful for order: {order_id}")
     else:
-        publish_event('PaymentFailed', {
+        publish_event('payment_events', 'PaymentFailed', {
             'order_id': order_id,
         })
         logger.info(f"Payment failed for order: {order_id}")
@@ -165,23 +164,32 @@ def handle_issue_refund(data):
         db.set(user_id, msgpack.encode(user_entry))
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
-    publish_event('RefundIssued', {
+    publish_event('payment_events', 'RefundIssued', {
         'order_id': order_id,
     })
     logger.info(f"Refund issued for order: {order_id}")
 
-def handle_event(event):
-    data = event.data
-    event_type = event.event_type
-    logger.info(f"Event: {event}")
+# def handle_event(event):
+#     data = event.data
+#     event_type = event.event_type
+#     logger.info(f"Event: {event}")
+#     if event_type == "ProcessPayment":
+#         logger.info("Received event")
+#         handle_process_payment(data)
+#     elif event_type == "IssueRefund":
+#         handle_issue_refund(data)
+#     else:
+#         logger.info("You should not be here")
+
+def process_event(ch, method, properties, body):
+    event = json.loads(body)
+    event_type = event['type']
+    app.logger.info(event_type)
+    data = event['data']
     if event_type == "ProcessPayment":
-        logger.info("Received event")
         handle_process_payment(data)
     elif event_type == "IssueRefund":
         handle_issue_refund(data)
-    else:
-        logger.info("You should not be here")
-
 
 # def process_event_queue():
 #     while True:
@@ -201,6 +209,8 @@ def handle_event(event):
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)
+    subscriber_thread = Thread(target=start_subscriber, args=('order_events', process_event))
+    subscriber_thread.start()
 else:
     gunicorn_logger = logging.getLogger('gunicorn.error')
     app.logger.handlers = gunicorn_logger.handlers

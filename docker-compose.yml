@@ -1,6 +1,12 @@
 version: "3"
 services:
 
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
   gateway:
     image: nginx:1.25-bookworm
     volumes:
@@ -21,6 +27,7 @@ services:
     env_file:
       - env/order_redis.env
     depends_on:
+      - rabbitmq
       - order-db
 
   order-db:
@@ -34,6 +41,7 @@ services:
     env_file:
       - env/stock_redis.env
     depends_on:
+      - rabbitmq
       - stock-db
 
   stock-db:
@@ -42,11 +50,12 @@ services:
 
   payment-service:
     build: ./payment
-    image: user:latest
+    image: payment:latest
     command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
     env_file:
       - env/payment_redis.env
     depends_on:
+      - rabbitmq
       - payment-db
 
   payment-db:
