@@ -24,12 +24,13 @@ app = Flask("order-service")
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
+logging.getLogger("pika").setLevel(logging.WARNING)
+
 db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               port=int(os.environ['REDIS_PORT']),
                               password=os.environ['REDIS_PASSWORD'],
                               db=int(os.environ['REDIS_DB']))
 
-event_queue = Queue()
 def close_db_connection():
     db.close()
 
@@ -173,7 +174,8 @@ def checkout(order_id: str):
     publish_event('order_events', 'ProcessPayment', {
         'order_id': order_id,
         'user_id': order_entry.user_id,
-        'total_cost': order_entry.total_cost
+        'total_cost': order_entry.total_cost,
+        'items': order_entry.items,
     })
     logger.info("Checkout initiated")
     return Response("Checkout initiated", status=200)
@@ -223,6 +225,7 @@ def process_event(ch, method, properties, body):
 
 def handle_payment_successful(data):
     order_id = data['order_id']
+    logger.info(f"Received payment, data: {data}")
     order_entry: OrderValue = get_order_from_db(order_id)
     order_entry.paid = True
     try:
@@ -276,14 +279,14 @@ def handle_stock_failed(data):
 #     worker.daemon = True
 #     worker.start()
 #
+subscriber_thread = Thread(target=start_subscriber, args=('payment_events', process_event))
+subscriber_thread.start()
+subscriber_thread = Thread(target=start_subscriber, args=('stock_events', process_event))
+subscriber_thread.start()
 
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)
-    subscriber_thread = Thread(target=start_subscriber, args=('payment_events', process_event))
-    subscriber_thread.start()
-    subscriber_thread = Thread(target=start_subscriber, args=('stock_events', process_event))
-    subscriber_thread.start()
 else:
     gunicorn_logger = logging.getLogger('gunicorn.error')
     app.logger.handlers = gunicorn_logger.handlers

@@ -1,6 +1,7 @@
 import logging
 import os
 import atexit
+import json
 from threading import Thread
 import uuid
 from event import Event
@@ -9,6 +10,7 @@ import redis
 
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
+from rabbitmq_utils import publish_event, start_subscriber
 
 
 DB_ERROR_STR = "DB error"
@@ -16,6 +18,8 @@ DB_ERROR_STR = "DB error"
 app = Flask("stock-service")
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
+logging.getLogger("pika").setLevel(logging.WARNING)
 
 db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               port=int(os.environ['REDIS_PORT']),
@@ -29,16 +33,15 @@ def close_db_connection():
 
 atexit.register(close_db_connection)
 
-event_queue = Queue()
 
 class StockValue(Struct):
     stock: int
     price: int
 
-def publish_event(event_type, data):
-    event = Event(event_type, data)
-    logger.info(f"Publishing event: {event.to_json()}")
-    db.publish('stock_events', event.to_json())
+# def publish_event(event_type, data):
+#     event = Event(event_type, data)
+#     logger.info(f"Publishing event: {event.to_json()}")
+#     db.publish('stock_events', event.to_json())
 
 
 def get_item_from_db(item_id: str) -> StockValue | None:
@@ -135,44 +138,53 @@ def handle_payment_successful(data):
                 db.set(item_id, msgpack.encode(item_entry))
             except redis.exceptions.RedisError:
                 return abort(400, DB_ERROR_STR)
-        publish_event('StockReserved', {
+        publish_event('stock_events', 'StockReserved', {
             'order_id': order_id,
         })
     else:
-        publish_event('StockFailed', {
+        publish_event('stock_events', 'StockFailed', {
             'order_id': order_id,
         })
 
-def subscribe_to_events():
-    pubsub = db.pubsub()
-    pubsub.subscribe('payment_events')
-    logger.info(f"Subscribed to payment_events channel")
-    for message in pubsub.listen():
-        if message['type'] == 'message':
-            event = Event.from_json(message['data'])
-            event_queue.put(event)
+# def subscribe_to_events():
+#     pubsub = db.pubsub()
+#     pubsub.subscribe('payment_events')
+#     logger.info(f"Subscribed to payment_events channel")
+#     for message in pubsub.listen():
+#         if message['type'] == 'message':
+#             event = Event.from_json(message['data'])
+#             event_queue.put(event)
 
-def handle_event(event):
-    data = event.data
-    event_type = event.event_type
-    if event_type == "PaymentSuccessful":
+# def handle_event(event):
+#     data = event.data
+#     event_type = event.event_type
+#     if event_type == "PaymentSuccessful":
+#         handle_payment_successful(data)
+
+# def process_event_queue():
+#     while True:
+#         event = event_queue.get()
+#         handle_event(event)
+#         event_queue.task_done()
+#
+# # Start a few worker threads
+# for i in range(5):
+#     worker = Thread(target=process_event_queue)
+#     worker.daemon = True
+#     worker.start()
+#
+# subscriber_thread = Thread(target=subscribe_to_events)
+# subscriber_thread.start()
+
+def process_event(ch, method, properties, body):
+    event = json.loads(body)
+    event_type = event['type']
+    data = event['data']
+    if event_type == 'PaymentSuccessful':
         handle_payment_successful(data)
 
-def process_event_queue():
-    while True:
-        event = event_queue.get()
-        handle_event(event)
-        event_queue.task_done()
-
-# Start a few worker threads
-for i in range(5):
-    worker = Thread(target=process_event_queue)
-    worker.daemon = True
-    worker.start()
-
-subscriber_thread = Thread(target=subscribe_to_events)
+subscriber_thread = Thread(target=start_subscriber, args=('payment_events', process_event))
 subscriber_thread.start()
-
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)

@@ -17,6 +17,8 @@ app = Flask("payment-service")
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
+logging.getLogger("pika").setLevel(logging.WARNING)
+
 db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               port=int(os.environ['REDIS_PORT']),
                               password=os.environ['REDIS_PASSWORD'],
@@ -135,6 +137,7 @@ def handle_process_payment(data):
     user_id = data['user_id']
     order_id = data['order_id']
     total_cost = data['total_cost']
+    items = data['items']
     user_entry: UserValue = get_user_from_db(user_id)
     if user_entry.credit >= total_cost:
         user_entry.credit -= total_cost
@@ -145,7 +148,8 @@ def handle_process_payment(data):
         publish_event('payment_events', 'PaymentSuccessful', {
             'order_id': order_id,
             'user_id': user_id,
-            'items': data['items'],
+            'total_cost': total_cost,
+            'items': items
         })
         logger.info(f"Payment successful for order: {order_id}")
     else:
@@ -206,11 +210,12 @@ def process_event(ch, method, properties, body):
 #     worker.daemon = True
 #     worker.start()
 
+subscriber_thread = Thread(target=start_subscriber, args=('order_events', process_event))
+subscriber_thread.start()
+
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)
-    subscriber_thread = Thread(target=start_subscriber, args=('order_events', process_event))
-    subscriber_thread.start()
 else:
     gunicorn_logger = logging.getLogger('gunicorn.error')
     app.logger.handlers = gunicorn_logger.handlers

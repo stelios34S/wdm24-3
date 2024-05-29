@@ -28,10 +28,10 @@ def publish_event(queue_name, event_type, data):
         routing_key=queue_name,
         body=json.dumps(event)
     )
-    print(f"Published event to {queue_name}: {event}")
+    pika.logging.info(f"Published event to {queue_name}: {event}")
 
 def start_subscriber(queue_name, callback):
     channel.queue_declare(queue=queue_name)
     channel.basic_consume(queue=queue_name, on_message_callback=callback, auto_ack=True)
-    print(f"Waiting for messages in {queue_name}. To exit press CTRL+C")
+    pika.logging.info(f"Waiting for messages in {queue_name}. To exit press CTRL+C")
     channel.start_consuming()
