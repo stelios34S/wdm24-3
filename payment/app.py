@@ -24,26 +24,11 @@ db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               password=os.environ['REDIS_PASSWORD'],
                               db=int(os.environ['REDIS_DB']))
 
-# pubsub = db.pubsub()
-# pubsub.subscribe('order_events')
-#
-# logger.info(db.pubsub_channels())
+
 def close_db_connection():
     db.close()
 
 # event_queue = Queue()
-
-# def subscribe_to_events():
-#     logger.info("Subscribed to order-events channel.")
-#     for message in pubsub.listen():
-#         logger.info(f"Received message: {message}")
-#         if message['type'] != 'subscribe':
-#             event = Event.from_json(message['data'])
-#             handle_event(event)
-
-
-# subscriber_thread = Thread(target=subscribe_to_events)
-# subscriber_thread.start()
 
 
 atexit.register(close_db_connection)

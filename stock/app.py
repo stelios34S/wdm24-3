@@ -38,10 +38,6 @@ class StockValue(Struct):
     stock: int
     price: int
 
-# def publish_event(event_type, data):
-#     event = Event(event_type, data)
-#     logger.info(f"Publishing event: {event.to_json()}")
-#     db.publish('stock_events', event.to_json())
 
 
 def get_item_from_db(item_id: str) -> StockValue | None:

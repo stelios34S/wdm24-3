@@ -18,16 +18,19 @@ services:
       - order-service
       - stock-service
       - payment-service
+
+
   orchestrator:
     build: ./orchestrator
     image : orchestrator:latest
-    environment:
-      - GATEWAY_URL=http://gateway:80
     command : gunicorn -b 0.0.0.0:8001 -w 2 --timeout 30 --log-level=info app:app
     env_file:
       - env/orchestrator_redis.env
     depends_on:
       - rabbitmq
+
+
+
   order-service:
     build: ./order
     image: order:latest

@@ -2,9 +2,10 @@ import pika
 import json
 import os
 import time
-
+from flask import Flask, jsonify, abort, Response
 RABBITMQ_HOST = os.getenv('RABBITMQ_HOST')
-
+DB_ERROR_STR = "DB error"
+REQ_ERROR_STR = "Requests error"
 def get_rabbitmq_connection():
     connection = None
     for i in range(10):  # Retry 10 times
@@ -22,13 +23,18 @@ connection = get_rabbitmq_connection()
 channel = connection.channel()
 
 def publish_event(queue_name, event_type, data):
-    event = {'type': event_type, 'data': data}
-    channel.basic_publish(
-        exchange='',
-        routing_key=queue_name,
-        body=json.dumps(event)
-    )
-    pika.logging.info(f"Published event to {queue_name}: {event}")
+    try:
+        event = {'type': event_type, 'data': data}
+        channel.basic_publish(
+            exchange='',
+            routing_key=queue_name,
+            body=json.dumps(event)
+        )
+        pika.logging.info(f"Published event to {queue_name}: {event}")
+    except pika.exceptions.AMQPError:
+        return abort(400, REQ_ERROR_STR)
+    return jsonify(event)
+
 
 def start_subscriber(queue_name, callback):
     channel.queue_declare(queue=queue_name)

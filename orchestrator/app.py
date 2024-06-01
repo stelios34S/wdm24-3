@@ -26,8 +26,20 @@ logger = logging.getLogger(__name__)
 
 logging.getLogger("pika").setLevel(logging.WARNING)
 
-print("NEW INSTANCE")
 
+
+@app.post('/create/<user_id>')
+def create_order(user_id: str):
+    try:
+        publish_event("events","OrderCreation",json.dumps(user_id))
+        #logger.info(f"Order created: {key}, for user {user_id}")
+    except redis.exceptions.RedisError:
+        return abort(400, DB_ERROR_STR)
+    return Response("Order Created",status=200)
+
+
+
+#start_subscriber('events', process_event)
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)

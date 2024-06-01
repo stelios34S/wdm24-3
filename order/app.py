@@ -12,13 +12,13 @@ import requests
 
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
-from rabbitmq_utils import publish_event, start_subscriber
 
+
+from rabbitmq_utils import publish_event, start_subscriber
 
 DB_ERROR_STR = "DB error"
 REQ_ERROR_STR = "Requests error"
-
-
+GATEWAY_URL = os.environ['GATEWAY_URL']
 app = Flask("order-service")
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -30,25 +30,13 @@ db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               password=os.environ['REDIS_PASSWORD'],
                               db=int(os.environ['REDIS_DB']))
 
+
 def close_db_connection():
     db.close()
 
 
-
-# def subscribe_to_events():
-#     pubsub = db.pubsub()
-#     pubsub.subscribe(['payment_events', 'stock_events'])
-#     logger.info("Subscribed to payment_events and stock_events channels.")
-#     for message in pubsub.listen():
-#         if message['type'] == 'message':
-#             event = Event.from_json(message['data'])
-#             event_queue.put(event)
-#
-# subscriber_thread = Thread(target=subscribe_to_events)
-# subscriber_thread.start()
-
-
 atexit.register(close_db_connection)
+
 
 class OrderValue(Struct):
     paid: bool
@@ -71,21 +59,21 @@ def get_order_from_db(order_id: str) -> OrderValue | None:
     return entry
 
 
-@app.post('/create/<user_id>')
+# @app.post('/create/<user_id>')
 def create_order(user_id: str):
     key = str(uuid.uuid4())
+
     value = msgpack.encode(OrderValue(paid=False, items=[], user_id=user_id, total_cost=0))
     try:
         db.set(key, value)
         logger.info(f"Order created: {key}, for user {user_id}")
     except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-    return jsonify({'order_id': key})
+        publish_event('events', 'OrderCreationFailed', {'order_id': key, 'user_id': user_id})
+    publish_event('events', 'OrderCreationSuccess', {'order_id': key, 'user_id': user_id})
 
 
 @app.post('/batch_init/<n>/<n_items>/<n_users>/<item_price>')
 def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
-
     n = int(n)
     n_items = int(n_items)
     n_users = int(n_users)
@@ -98,7 +86,7 @@ def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
         value = OrderValue(paid=False,
                            items=[(f"{item1_id}", 1), (f"{item2_id}", 1)],
                            user_id=f"{user_id}",
-                           total_cost=2*item_price)
+                           total_cost=2 * item_price)
         return value
 
     kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(generate_entry())
@@ -180,38 +168,13 @@ def checkout(order_id: str):
     return Response("Checkout initiated", status=200)
 
 
-# def publish_event(event_type, data):
-#     event = Event(event_type, data)
-#     test = db.publish('order_events', event.to_json())
-#     channels_subs = db.pubsub_channels()
-#     logger.info(f"Publishing event: {event.to_json()}")
-
-# def publish_event(event_type, data):
-#     event = {'type': event_type, 'data': data}
-#     channel.basic_publish(
-#         exchange='events',
-#         routing_key=event_type,
-#         body=json.dumps(event)
-#     )
-#     print(f"Published event: {event}")
-
-
-# def handle_event(event):
-#     data = event.data
-#     event_type = event.event_type
-#     if event_type == "PaymentSuccessful":
-#         handle_payment_successful(data)
-#     elif event_type == "PaymentFailed":
-#         handle_payment_failed(data)
-#     elif event_type == "StockReserved":
-#         handle_stock_reserved(data)
-#     elif event_type == "StockFailed":
-#         handle_stock_failed(data)
-
 def process_event(ch, method, properties, body):
     event = json.loads(body)
     event_type = event['type']
     data = event['data']
+    if event_type == 'OrderCreation':
+        logger.info(f"Order created: {data}")
+        create_order(data)
     if event_type == 'PaymentSuccessful':
         handle_payment_successful(data)
     elif event_type == 'PaymentFailed':
@@ -233,6 +196,7 @@ def handle_payment_successful(data):
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
 
+
 def handle_payment_failed(data):
     order_id = data['order_id']
     order_entry: OrderValue = get_order_from_db(order_id)
@@ -243,10 +207,12 @@ def handle_payment_failed(data):
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
 
+
 def handle_stock_reserved(data):
     order_id = data['order_id']
     logger.debug(f"Checkout successful for order {order_id}")
     return Response("Checkout successful", status=200)
+
 
 def handle_stock_failed(data):
     order_id = data['order_id']
@@ -257,6 +223,7 @@ def handle_stock_failed(data):
         'total_cost': order_entry.total_cost
     })
     logger.info(f"Stock failed for order: {order_id}")
+
 
 # def start_subscriber():
 #     channel.queue_declare(queue='order_queue')
@@ -279,10 +246,7 @@ def handle_stock_failed(data):
 #     worker.start()
 #
 
-start_subscriber('payment_events', process_event)
-start_subscriber('stock_events',process_event)
-
-
+start_subscriber('events', process_event)
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)
