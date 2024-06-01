@@ -72,13 +72,13 @@ def create_order(user_id: str):
     publish_event('events', 'OrderCreationSuccess', {'order_id': key, 'user_id': user_id})
 
 
-@app.post('/batch_init/<n>/<n_items>/<n_users>/<item_price>')
+#@app.post('/batch_init/<n>/<n_items>/<n_users>/<item_price>')
 def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
-    n = int(n)
-    n_items = int(n_items)
-    n_users = int(n_users)
-    item_price = int(item_price)
-
+    # n = int(n)
+    # n_items = int(n_items)
+    # n_users = int(n_users)
+    # item_price = int(item_price)
+    logger.info(f"Batch init  n: {n}, n_items: {n_items}, n_users: {n_users}, item_price: {item_price}")
     def generate_entry() -> OrderValue:
         user_id = random.randint(0, n_users - 1)
         item1_id = random.randint(0, n_items - 1)
@@ -93,6 +93,7 @@ def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
                                   for i in range(n)}
     try:
         db.mset(kv_pairs)
+        logger.info("Batch init for orders successful")
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
     return jsonify({"msg": "Batch init for orders successful"})
@@ -175,6 +176,8 @@ def process_event(ch, method, properties, body):
     if event_type == 'OrderCreation':
         logger.info(f"Order created: {data}")
         create_order(data)
+    if event_type == 'BatchInit':
+        batch_init_users(data[0], data[1], data[2], data[3])
     if event_type == 'PaymentSuccessful':
         handle_payment_successful(data)
     elif event_type == 'PaymentFailed':
