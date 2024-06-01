@@ -41,8 +41,10 @@ logging.getLogger("pika").setLevel(logging.WARNING)
 #                                                              port=int(os.environ['REDIS_PORT']))
 
 # from rediscluster import RedisCluster
-
-db = redis.cluster.RedisCluster(host=os.environ['REDIS_HOST'])
+try:
+    db = redis.cluster.RedisCluster(host=os.environ['REDIS_HOST'], port=int(os.environ['REDIS_PORT']))
+except Exception as e:
+    logger.error(f"Error connecting to Redis: {e}")
 
 # startup_nodes = [{"host": "127.0.0.1", "port": "6379"}]
 
