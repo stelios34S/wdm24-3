@@ -18,7 +18,6 @@ from rabbitmq_utils import publish_event, start_subscriber
 DB_ERROR_STR = "DB error"
 REQ_ERROR_STR = "Requests error"
 
-GATEWAY_URL = os.environ['GATEWAY_URL']
 
 app = Flask("order-service")
 logging.basicConfig(level=logging.DEBUG)
@@ -279,10 +278,10 @@ def handle_stock_failed(data):
 #     worker.daemon = True
 #     worker.start()
 #
-subscriber_thread = Thread(target=start_subscriber, args=('payment_events', process_event))
-subscriber_thread.start()
-subscriber_thread = Thread(target=start_subscriber, args=('stock_events', process_event))
-subscriber_thread.start()
+
+start_subscriber('payment_events', process_event)
+start_subscriber('stock_events',process_event)
+
 
 
 if __name__ == '__main__':
