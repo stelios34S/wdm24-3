@@ -26,10 +26,41 @@ logger = logging.getLogger(__name__)
 
 logging.getLogger("pika").setLevel(logging.WARNING)
 
-db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
-                              port=int(os.environ['REDIS_PORT']),
-                              password=os.environ['REDIS_PASSWORD'],
-                              db=int(os.environ['REDIS_DB']))
+# db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
+#                               port=int(os.environ['REDIS_PORT']),
+#                               password=os.environ['REDIS_PASSWORD'],
+#                               db=int(os.environ['REDIS_DB']))
+
+# db: redis.RedisCluster = redis.RedisCluster(
+#                             startup_nodes=[
+#                                 {"host": "127.0.0.1", "port": "7002"}
+#                             ],
+#                             decode_responses=True)
+
+# db: redis.cluster.RedisCluster = redis.cluster.RedisCluster (host=os.environ['REDIS_HOST'],
+#                                                              port=int(os.environ['REDIS_PORT']))
+
+# from rediscluster import RedisCluster
+
+db = redis.cluster.RedisCluster(host=os.environ['REDIS_HOST'])
+
+# startup_nodes = [{"host": "127.0.0.1", "port": "6379"}]
+
+# Note: decode_responses must be set to True when used with python3
+# db = RedisCluster(startup_nodes=startup_nodes, decode_responses=True)
+
+# redis_nodes = [{"host": node.split(':')[0], "port": node.split(':')[1]} for node in os.environ['REDIS_NODES'].split(',')]
+
+# # Initialize Redis Cluster connection
+# try:
+#     db = redis.cluster.RedisCluster(
+#         startup_nodes=redis_nodes, 
+#         password=os.environ.get('REDIS_PASSWORD'), 
+#         decode_responses=True
+#     )
+# except Exception as e:
+#     logger.error(f"Error connecting to Redis: {e}")
+#     db = None
 
 def close_db_connection():
     db.close()
