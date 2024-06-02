@@ -13,18 +13,18 @@ import requests
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
 
-
 from rabbitmq_utils import publish_event, start_subscriber
 
 DB_ERROR_STR = "DB error"
 REQ_ERROR_STR = "Requests error"
-GATEWAY_URL = os.environ['GATEWAY_URL']
+GATEWAY_URL = "http://orchestrator:8001"
+
 app = Flask("order-service")
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 logging.getLogger("pika").setLevel(logging.WARNING)
-
+logger.info(f'{GATEWAY_URL} gateway url')
 db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               port=int(os.environ['REDIS_PORT']),
                               password=os.environ['REDIS_PASSWORD'],
@@ -43,6 +43,15 @@ class OrderValue(Struct):
     items: list[tuple[str, int]]
     user_id: str
     total_cost: int
+
+
+def send_post_request_orch(url, data):
+    try:
+        response = requests.post(url, json=data)
+        response.raise_for_status()
+        logger.info(f"Sent POST request to {url} with data {data}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to send POST request to {url}: {e}")
 
 
 def get_order_from_db(order_id: str) -> OrderValue | None:
@@ -68,17 +77,18 @@ def create_order(user_id: str):
         db.set(key, value)
         logger.info(f"Order created: {key}, for user {user_id}")
     except redis.exceptions.RedisError:
-        publish_event('events', 'OrderCreationFailed', {'order_id': key, 'user_id': user_id})
-    publish_event('events', 'OrderCreationSuccess', {'order_id': key, 'user_id': user_id})
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type':'CreateOrder','status': 'failed'}))
+    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'CreateOrder','status': 'succeded'}))
 
 
-#@app.post('/batch_init/<n>/<n_items>/<n_users>/<item_price>')
+# @app.post('/batch_init/<n>/<n_items>/<n_users>/<item_price>')
 def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
     # n = int(n)
     # n_items = int(n_items)
     # n_users = int(n_users)
     # item_price = int(item_price)
     logger.info(f"Batch init  n: {n}, n_items: {n_items}, n_users: {n_users}, item_price: {item_price}")
+
     def generate_entry() -> OrderValue:
         user_id = random.randint(0, n_users - 1)
         item1_id = random.randint(0, n_items - 1)

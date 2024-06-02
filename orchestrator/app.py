@@ -11,7 +11,7 @@ import redis
 import requests
 
 from msgspec import msgpack, Struct
-from flask import Flask, jsonify, abort, Response
+from flask import Flask, jsonify, abort, Response, request
 from rabbitmq_utils import publish_event, start_subscriber
 
 
@@ -26,7 +26,19 @@ logger = logging.getLogger(__name__)
 
 logging.getLogger("pika").setLevel(logging.WARNING)
 
+#----------------------------------IDEA FOR ACKS NEW IDEA-------------------------------------------------------------
+#SO WE CAN POSSIBLY CREATE A NEW ENDPOINT IN THE ORCHESTRATOR THAT JUST WAITS FOR ACKS.
+# BASICALLY THE OTHER SERIVCES CAN SEND ACKS TO THIS ENDPOINT
+#AND WE CAN SHOW THEM TO THE USER.
+@app.route('/acks', methods=['POST'])
+def ack_endpoint():
+    ack_data = request.json
+    logger.info(f"Received ack: {ack_data}")
+    return jsonify({'status': ack_data}), 200
 
+##----------------------------------IDEA FOR ACKS NEW IDEA-------------------------------------------------------------
+#WE CAN ALSO CREATE AN ORCHESTRATOR SUBSCRIBER WHICH POINTS TO THE GATEWAY AS WELL AND IS JUST THERE TO CONSUME ACK MESSAGES FROM
+#THE RABBIT MQ , AND RESPOND TO THE USER
 
 @app.post('/create/<user_id>')
 def create_order(user_id: str):
