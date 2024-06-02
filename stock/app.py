@@ -4,6 +4,9 @@ import atexit
 import json
 from threading import Thread
 import uuid
+
+import requests
+
 from event import Event
 from queue import Queue
 import redis
@@ -12,13 +15,12 @@ from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
 from rabbitmq_utils import publish_event, start_subscriber
 
-
 DB_ERROR_STR = "DB error"
 
 app = Flask("stock-service")
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
-
+GATEWAY_URL = "http://orchestrator:8001"
 logging.getLogger("pika").setLevel(logging.WARNING)
 
 db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
@@ -34,10 +36,18 @@ def close_db_connection():
 atexit.register(close_db_connection)
 
 
+def send_post_request_orch(url, data):
+    try:
+        response = requests.post(url, json=data)
+        response.raise_for_status()
+        logger.info(f"Sent POST request to {url} with data {data}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to send POST request to {url}: {e}")
+
+
 class StockValue(Struct):
     stock: int
     price: int
-
 
 
 def get_item_from_db(item_id: str) -> StockValue | None:
@@ -54,15 +64,17 @@ def get_item_from_db(item_id: str) -> StockValue | None:
     return entry
 
 
-@app.post('/item/create/<price>')
-def create_item(price: int):
+# @app.post('/item/create/<price>')
+def create_item(price: int): ####Transfered to orchestrator
     key = str(uuid.uuid4())
     app.logger.debug(f"Item: {key} created")
     value = msgpack.encode(StockValue(stock=0, price=int(price)))
     try:
         db.set(key, value)
     except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'CreateItem', 'status': 'failed'}))
+        #return abort(400, DB_ERROR_STR)
+    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'CreateItem', 'status': 'succeed'}))
     return jsonify({'item_id': key})
 
 
@@ -91,7 +103,7 @@ def find_item(item_id: str):
     )
 
 
-@app.post('/add/<item_id>/<amount>')
+#@app.post('/add/<item_id>/<amount>') ####Transfered to orchestrator
 def add_stock(item_id: str, amount: int):
     item_entry: StockValue = get_item_from_db(item_id)
     # update stock, serialize and update database
@@ -99,23 +111,32 @@ def add_stock(item_id: str, amount: int):
     try:
         db.set(item_id, msgpack.encode(item_entry))
     except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-    return Response(f"Item: {item_id} stock updated to: {item_entry.stock}", status=200)
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'AddStock', 'status': 'failed'}))
+        #return abort(400, DB_ERROR_STR)
+    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'AddStock', 'status': 'succeed'}))
+    #return Response(f"Item: {item_id} stock updated to: {item_entry.stock}", status=200)
 
 
-@app.post('/subtract/<item_id>/<amount>')
+#@app.post('/subtract/<item_id>/<amount>') ###transfer to orchestrator
 def remove_stock(item_id: str, amount: int):
     item_entry: StockValue = get_item_from_db(item_id)
     # update stock, serialize and update database
     item_entry.stock -= int(amount)
     app.logger.debug(f"Item: {item_id} stock updated to: {item_entry.stock}")
     if item_entry.stock < 0:
-        abort(400, f"Item: {item_id} stock cannot get reduced below zero!")
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'RemoveStock', 'status': 'failed'}))
+        #abort(400, f"Item: {item_id} stock cannot get reduced below zero!")
     try:
         db.set(item_id, msgpack.encode(item_entry))
     except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-    return Response(f"Item: {item_id} stock updated to: {item_entry.stock}", status=200)
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'RemoveStock', 'status': 'failed'}))
+        #return abort(400, DB_ERROR_STR)
+    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'RemoveStock', 'status': 'succeed'}))
+    #return Response(f"Item: {item_id} stock updated to: {item_entry.stock}", status=200)
+
+
+
+
 
 def handle_payment_successful(data):
     order_id = data['order_id']
@@ -134,53 +155,32 @@ def handle_payment_successful(data):
                 db.set(item_id, msgpack.encode(item_entry))
             except redis.exceptions.RedisError:
                 return abort(400, DB_ERROR_STR)
-        publish_event('stock_events', 'StockReserved', {
+        publish_event('events', 'StockReserved', {
             'order_id': order_id,
         })
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'PaymentSuccessful', 'status': 'succeed'}))
     else:
-        publish_event('stock_events', 'StockFailed', {
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'PaymentSuccessful', 'status': 'failed'}))
+        publish_event('events', 'StockFailed', {
             'order_id': order_id,
         })
 
-# def subscribe_to_events():
-#     pubsub = db.pubsub()
-#     pubsub.subscribe('payment_events')
-#     logger.info(f"Subscribed to payment_events channel")
-#     for message in pubsub.listen():
-#         if message['type'] == 'message':
-#             event = Event.from_json(message['data'])
-#             event_queue.put(event)
 
-# def handle_event(event):
-#     data = event.data
-#     event_type = event.event_type
-#     if event_type == "PaymentSuccessful":
-#         handle_payment_successful(data)
-
-# def process_event_queue():
-#     while True:
-#         event = event_queue.get()
-#         handle_event(event)
-#         event_queue.task_done()
-#
-# # Start a few worker threads
-# for i in range(5):
-#     worker = Thread(target=process_event_queue)
-#     worker.daemon = True
-#     worker.start()
-#
-# subscriber_thread = Thread(target=subscribe_to_events)
-# subscriber_thread.start()
 
 def process_event(ch, method, properties, body):
     event = json.loads(body)
     event_type = event['type']
     data = event['data']
-    if event_type == 'PaymentSuccessful':
+    if event_type == 'PaymentSuccessfulStock':
         handle_payment_successful(data)
+    if event_type == 'CreateItem':
+        create_item(data)
+    if event_type == 'AddStock':
+        add_stock(data[0],data[0])
+    if event_type == 'RemoveStock':
+        remove_stock(data[0],data[0])
 
-subscriber_thread = Thread(target=start_subscriber, args=('payment_events', process_event))
-subscriber_thread.start()
+start_subscriber('events', process_event)
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)

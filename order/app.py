@@ -13,7 +13,7 @@ import requests
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
 
-from rabbitmq_utils import publish_event, start_subscriber
+from rabbitmq_utils import publish_event, rpc_call, start_subscriber
 
 DB_ERROR_STR = "DB error"
 REQ_ERROR_STR = "Requests error"
@@ -54,7 +54,7 @@ def send_post_request_orch(url, data):
         logger.error(f"Failed to send POST request to {url}: {e}")
 
 
-def get_order_from_db(order_id: str) -> OrderValue | None:
+def get_order_from_db(order_id: str) -> OrderValue | None: ###Does not need to get transferred
     try:
         # get serialized data
         entry: bytes = db.get(order_id)
@@ -69,7 +69,7 @@ def get_order_from_db(order_id: str) -> OrderValue | None:
 
 
 # @app.post('/create/<user_id>')
-def create_order(user_id: str):
+def create_order(user_id: str): #### ENDPOINT TRANSFERRED TO ORCHESTRATOR
     key = str(uuid.uuid4())
 
     value = msgpack.encode(OrderValue(paid=False, items=[], user_id=user_id, total_cost=0))
@@ -77,17 +77,18 @@ def create_order(user_id: str):
         db.set(key, value)
         logger.info(f"Order created: {key}, for user {user_id}")
     except redis.exceptions.RedisError:
-        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type':'CreateOrder','status': 'failed'}))
-    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'CreateOrder','status': 'succeded'}))
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'CreateOrder', 'status': 'failed'}))
+    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'CreateOrder', 'status': 'succeeded'}))
 
 
-# @app.post('/batch_init/<n>/<n_items>/<n_users>/<item_price>')
+@app.post('/batch_init/<n>/<n_items>/<n_users>/<item_price>') ###Does not need to get transferred
 def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
-    # n = int(n)
-    # n_items = int(n_items)
-    # n_users = int(n_users)
-    # item_price = int(item_price)
-    logger.info(f"Batch init  n: {n}, n_items: {n_items}, n_users: {n_users}, item_price: {item_price}")
+    n = int(n)
+    n_items = int(n_items)
+    n_users = int(n_users)
+    item_price = int(item_price)
+
+    # logger.info(f"Batch init  n: {n}, n_items: {n_items}, n_users: {n_users}, item_price: {item_price}")
 
     def generate_entry() -> OrderValue:
         user_id = random.randint(0, n_users - 1)
@@ -109,7 +110,7 @@ def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
     return jsonify({"msg": "Batch init for orders successful"})
 
 
-@app.get('/find/<order_id>')
+@app.get('/find/<order_id>') ###Does not need to get transferred
 def find_order(order_id: str):
     order_entry: OrderValue = get_order_from_db(order_id)
     return jsonify(
@@ -141,12 +142,13 @@ def send_get_request(url: str):
         return response
 
 
-@app.post('/addItem/<order_id>/<item_id>/<quantity>')
-def add_item(order_id: str, item_id: str, quantity: int):
+# @app.post('/addItem/<order_id>/<item_id>/<quantity>')
+def add_item(order_id: str, item_id: str, quantity: int): #### ENDPOINT TRANSFERRED TO ORCHESTRATOR
     order_entry: OrderValue = get_order_from_db(order_id)
     item_reply = send_get_request(f"{GATEWAY_URL}/stock/find/{item_id}")
     if item_reply.status_code != 200:
         # Request failed because item does not exist
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'ItemAdded', 'status': 'failed'}))
         abort(400, f"Item: {item_id} does not exist!")
     item_json: dict = item_reply.json()
     order_entry.items.append((item_id, int(quantity)))
@@ -155,28 +157,58 @@ def add_item(order_id: str, item_id: str, quantity: int):
         db.set(order_id, msgpack.encode(order_entry))
         logger.info(f"Item: {item_id} added to: {order_id} price updated to: {order_entry.total_cost}")
     except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-    return Response(f"Item: {item_id} added to: {order_id} price updated to: {order_entry.total_cost}",
-                    status=200)
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'ItemAdded', 'status': 'failed'}))
+        #return abort(400, DB_ERROR_STR)
+    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'ItemAdded', 'status': 'succeeded',
+                                                              'data': {'order_id': order_id,
+                                                                       'total_cost': order_entry.total_cost}}))
+    #return Response(f"Item: {item_id} added to: {order_id} price updated to: {order_entry.total_cost}",status=200)
 
 
+# def add_item(order_id: str, item_id: str, quantity: int):
+#     try:
+#         response = rpc_call('events', 'CheckStock', {'item_id': item_id}, 'events')
+#         if response['status'] == 'success':
+#             item_price = response['data']['price']
+#             order_entry = get_order_from_db(order_id)
+#             order_entry.items.append((item_id, int(quantity)))
+#             order_entry.total_cost += int(quantity) * item_price
+#             db.set(order_id, msgpack.encode(order_entry))
+#             logger.info(f"Item: {item_id} added to: {order_id} price updated to: {order_entry.total_cost}")
+#             send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'ItemAdded', 'status': 'succeeded','data': {'order_id': order_id, 'total_cost': order_entry.total_cost}}))
+#             # return jsonify({'status': 'Item added to order', 'order_id': order_id, 'total_cost': order_entry.total_cost}), 200 ##make this an ack
+#         else:
+#             send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'ItemAdded', 'status': 'failed'}))
+#             return jsonify({'status': 'failed', 'error': response['data']['error']}), 400
+#     except TimeoutError as e:
+#         logger.error(f"Timeout while checking stock: {e}")
+#         return jsonify({'status': 'failed', 'error': 'Stock check timed out'}), 500
+#     except Exception as e:
+#         logger.error(f"Error adding item to order: {e}")
+#         return jsonify({'status': 'failed', 'error': str(e)}), 500
+
+
+#####STILL UNSURE ABOUT THIS METHOF
 def rollback_stock(removed_items: list[tuple[str, int]]):
     for item_id, quantity in removed_items:
         send_post_request(f"{GATEWAY_URL}/stock/add/{item_id}/{quantity}")
 
 
-@app.post('/checkout/<order_id>')
-def checkout(order_id: str):
-    logger.debug(f"Checking out {order_id}")
-    order_entry: OrderValue = get_order_from_db(order_id)
-    publish_event('order_events', 'ProcessPayment', {
-        'order_id': order_id,
-        'user_id': order_entry.user_id,
-        'total_cost': order_entry.total_cost,
-        'items': order_entry.items,
-    })
-    logger.info("Checkout initiated")
-    return Response("Checkout initiated", status=200)
+# @app.post('/checkout/<order_id>')
+def checkout(order_id: str): #### ENDPOINT TRANSFERRED TO ORCHESTRATOR
+    try:
+        order_entry: OrderValue = get_order_from_db(order_id)
+        publish_event("events", "ProcessPayment", {
+            'order_id': order_id,
+            'user_id': order_entry.user_id,
+            'total_cost': order_entry.total_cost,
+            'items': order_entry.items,
+        })
+    except redis.exceptions.RedisError:
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'Checkout', 'status': 'failed'}))
+        #return abort(400, DB_ERROR_STR)
+    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'Checkout', 'status': 'initiated'}))
+    #return Response("Checkout initiated", status=200)
 
 
 def process_event(ch, method, properties, body):
@@ -186,9 +218,13 @@ def process_event(ch, method, properties, body):
     if event_type == 'OrderCreation':
         logger.info(f"Order created: {data}")
         create_order(data)
-    if event_type == 'BatchInit':
-        batch_init_users(data[0], data[1], data[2], data[3])
-    if event_type == 'PaymentSuccessful':
+    if event_type == 'AddItem':
+        add_item(data[0], data[1], data[2])
+    if event_type == 'Checkout':
+        checkout(data)
+    if event_type == 'RefundIssued':
+        handle_issue_refund(data)
+    if event_type == 'PaymentSuccessfulOrder':
         handle_payment_successful(data)
     elif event_type == 'PaymentFailed':
         handle_payment_failed(data)
@@ -197,7 +233,8 @@ def process_event(ch, method, properties, body):
     elif event_type == 'StockFailed':
         handle_stock_failed(data)
 
-
+def handle_issue_refund(data):
+    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'IssueRefund', 'status': 'succeed'}))
 def handle_payment_successful(data):
     order_id = data['order_id']
     logger.info(f"Received payment, data: {data}")
@@ -217,6 +254,7 @@ def handle_payment_failed(data):
     try:
         db.set(order_id, msgpack.encode(order_entry))
         logger.info(f"Payment failed for order {order_id}")
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'PaymentFailed', 'status': 'succeed'}))
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
 
@@ -224,40 +262,21 @@ def handle_payment_failed(data):
 def handle_stock_reserved(data):
     order_id = data['order_id']
     logger.debug(f"Checkout successful for order {order_id}")
+    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'Checkout', 'status': 'succeed'}))
     return Response("Checkout successful", status=200)
 
 
 def handle_stock_failed(data):
     order_id = data['order_id']
     order_entry: OrderValue = get_order_from_db(order_id)
-    publish_event('order_events', 'IssueRefund', {
+    publish_event('events', 'IssueRefund', {
         'order_id': order_id,
         'user_id': order_entry.user_id,
         'total_cost': order_entry.total_cost
     })
+    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'HandleStockFailed', 'status': 'succeed'}))
     logger.info(f"Stock failed for order: {order_id}")
 
-
-# def start_subscriber():
-#     channel.queue_declare(queue='order_queue')
-#     channel.queue_bind(exchange='events', queue='order_queue', routing_key='order_created')
-#
-#     # channel.basic_consume(queue='order_queue', on_message_callback=callback, auto_ack=True)
-#     # print('Waiting for messages. To exit press CTRL+C')
-#     # channel.start_consuming()
-#
-# def process_event_queue():
-#     while True:
-#         event = event_queue.get()
-#         handle_event(event)
-#         event_queue.task_done()
-#
-# # Start a few worker threads
-# for i in range(5):
-#     worker = Thread(target=process_event_queue)
-#     worker.daemon = True
-#     worker.start()
-#
 
 start_subscriber('events', process_event)
 

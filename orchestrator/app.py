@@ -34,12 +34,13 @@ logging.getLogger("pika").setLevel(logging.WARNING)
 def ack_endpoint():
     ack_data = request.json
     logger.info(f"Received ack: {ack_data}")
-    return jsonify({'status': ack_data}), 200
+    return jsonify({'data': ack_data}), 200
 
-##----------------------------------IDEA FOR ACKS NEW IDEA-------------------------------------------------------------
-#WE CAN ALSO CREATE AN ORCHESTRATOR SUBSCRIBER WHICH POINTS TO THE GATEWAY AS WELL AND IS JUST THERE TO CONSUME ACK MESSAGES FROM
-#THE RABBIT MQ , AND RESPOND TO THE USER
 
+
+
+
+#----------------------------------ORDER SERVICE-------------------------------------------------------------
 @app.post('/create/<user_id>')
 def create_order(user_id: str):
     try:
@@ -49,27 +50,90 @@ def create_order(user_id: str):
         return abort(400, DB_ERROR_STR)
     return Response("Order Created",status=200)
 
+@app.post('/checkout/<order_id>')
+def checkout(order_id: str):
+    logger.debug(f"Checking out {order_id}")
+    publish_event("events","Checkout",json.dumps(order_id))
+    logger.info("Checkout initiated")
+    return Response("Checkout initiated", status=200)
+# @app.post('/batch_init/<n>/<n_items>/<n_users>/<item_price>')
+# def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
+#     try:
+#         data = {"n": int(n), "n_items": int(n_items), "n_users": int(n_users), "item_price": int(item_price)}
+#         publish_event("events","BatchInit",json.dumps(data))
+#     except redis.exceptions.RedisError:
+#         return abort(400, DB_ERROR_STR)
+#     return jsonify({"msg": "Batch init for orders successful"})
 
-@app.post('/batch_init/<n>/<n_items>/<n_users>/<item_price>')
-def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
+
+@app.post('/addItem/<order_id>/<item_id>/<quantity>')
+def add_item(order_id: str, item_id: str, quantity: int):
     try:
-        data = {"n": int(n), "n_items": int(n_items), "n_users": int(n_users), "item_price": int(item_price)}
-        publish_event("events","BatchInit",json.dumps(data))
+        data={"order_id": order_id, "item_id": item_id, "quantity": quantity}
+        publish_event("events","AddItem",json.dumps(data))
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
-    return jsonify({"msg": "Batch init for orders successful"})
+    return jsonify({"msg": "Item added to order"})
+#------------------------------------------------------------------------------------------------------------------
+#----------------------------------PAYMENT SERVICE-------------------------------------------------------------
+@app.post('/create_user') ####transfer to orchestrator
+def create_user():
+    try:
+        publish_event("events","CreateUser","")
+    except redis.exceptions.RedisError:
+        return abort(400, DB_ERROR_STR)
+    return jsonify({'msg': 'User is being created'}), 200
 
-#start_subscriber('events', process_event)
-def process_event(ch, method, properties, body):
-    event = json.loads(body)
-    event_type = event['type']
-    data = event['data']
-    if event_type == 'OrderCreationSuccess':
-        logger.info(f"Order created: {data}")
-    elif event_type == 'OrderCreationFailed':
-        logger.error(f"Order creation failed: {data}")
+
+@app.post('/add_funds/<user_id>/<amount>')
+def add_credit(user_id: str, amount: int):
+    try:
+        data={"user_id": user_id, "amount": amount}
+        publish_event("events","AddCredit",json.dumps(data))
+    except redis.exceptions.RedisError:
+        return abort(400, DB_ERROR_STR)
+    return Response(f"User: {user_id} credit is beging updated", status=200)
+
+@app.post('/pay/<user_id>/<amount>')
+def remove_credit(user_id: str, amount: int):
+    logger.info(f"Removing {amount} credit from user: {user_id}")
+    try:
+        data={"user_id": user_id, "amount": amount}
+        publish_event("events","RemoveCredit",json.dumps(data))
+    except redis.exceptions.RedisError:
+        return abort(400, DB_ERROR_STR)
+    return Response(f"User: {user_id} credit is being updated", status=200)
+#------------------------------------------------------------------------------------------------------------------
+#----------------------------------STOCK SERVICE-------------------------------------------------------------
+
+@app.post('/item/create/<price>')
+def create_item(price: int):
+    try:
+        data = {"price": price}
+        publish_event("events","CreateItem",json.dumps(data))
+    except redis.exceptions.RedisError:
+        return abort(400, DB_ERROR_STR)
+    return Response(f"Item: is being created", status=200)
 
 
+@app.post('/add/<item_id>/<amount>') ####Transfered to orchestrator
+def add_stock(item_id: str, amount: int):
+    try:
+        data = {"item_id": item_id, "amount": amount}
+        publish_event("events","AddStock",json.dumps(data))
+    except redis.exceptions.RedisError:
+        return abort(400, DB_ERROR_STR)
+    return Response(f"Item: {item_id} stock is being updated", status=200)
+
+@app.post('/subtract/<item_id>/<amount>') ###transfer to orchestrator
+def remove_stock(item_id: str, amount: int):
+    try:
+        data = {"item_id": item_id, "amount": amount}
+        publish_event("events","RemoveStock",json.dumps(data))
+    except redis.exceptions.RedisError:
+        return abort(400, DB_ERROR_STR)
+    return Response(f"Item: {item_id} stock is being updated", status=200)
+#------------------------------------------------------------------------------------------------------------------
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)
 else:

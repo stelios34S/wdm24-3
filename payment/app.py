@@ -5,6 +5,7 @@ from threading import Thread
 import json
 import uuid
 import redis
+import requests
 
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
@@ -16,7 +17,7 @@ DB_ERROR_STR = "DB error"
 app = Flask("payment-service")
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
-
+GATEWAY_URL = "http://orchestrator:8001"
 logging.getLogger("pika").setLevel(logging.WARNING)
 
 db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
@@ -41,7 +42,13 @@ class UserValue(Struct):
 #     logger.info(f"Publishing event: {event.to_json()}")
 #     db.publish('payment_events', event.to_json())
 
-
+def send_post_request_orch(url, data):
+    try:
+        response = requests.post(url, json=data)
+        response.raise_for_status()
+        logger.info(f"Sent POST request to {url} with data {data}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to send POST request to {url}: {e}")
 def get_user_from_db(user_id: str) -> UserValue | None:
     try:
         # get serialized data
@@ -56,15 +63,17 @@ def get_user_from_db(user_id: str) -> UserValue | None:
     return entry
 
 
-@app.post('/create_user')
+#@app.post('/create_user') ####transfer to orchestrator
 def create_user():
     key = str(uuid.uuid4())
     value = msgpack.encode(UserValue(credit=0))
     try:
         db.set(key, value)
     except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-    return jsonify({'user_id': key})
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'CreateUser', 'status': 'failed'}))
+        #return abort(400, DB_ERROR_STR)
+    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'CreateUser', 'status': 'succeed'}))
+    #return jsonify({'user_id': key})
 
 
 @app.post('/batch_init/<n>/<starting_money>')
@@ -91,7 +100,7 @@ def find_user(user_id: str):
     )
 
 
-@app.post('/add_funds/<user_id>/<amount>')
+#@app.post('/add_funds/<user_id>/<amount>') #####transfer to orchestrator
 def add_credit(user_id: str, amount: int):
     user_entry: UserValue = get_user_from_db(user_id)
     # update credit, serialize and update database
@@ -99,23 +108,28 @@ def add_credit(user_id: str, amount: int):
     try:
         db.set(user_id, msgpack.encode(user_entry))
     except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-    return Response(f"User: {user_id} credit updated to: {user_entry.credit}", status=200)
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'AddCredit', 'status': 'failed'}))
+        #return abort(400, DB_ERROR_STR)
+    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'AddCredit', 'status': 'succeed'}))
+    #return Response(f"User: {user_id} credit updated to: {user_entry.credit}", status=200)
 
 
-@app.post('/pay/<user_id>/<amount>')
+#@app.post('/pay/<user_id>/<amount>') #####transfer to orchestrator
 def remove_credit(user_id: str, amount: int):
     logger.info(f"Removing {amount} credit from user: {user_id}")
     user_entry: UserValue = get_user_from_db(user_id)
     # update credit, serialize and update database
     user_entry.credit -= int(amount)
     if user_entry.credit < 0:
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'RemoveCredit', 'status': 'failed'}))
         abort(400, f"User: {user_id} credit cannot get reduced below zero!")
     try:
         db.set(user_id, msgpack.encode(user_entry))
     except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-    return Response(f"User: {user_id} credit updated to: {user_entry.credit}", status=200)
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'RemoveCredit', 'status': 'failed'}))
+        #return abort(400, DB_ERROR_STR)
+    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'RemoveCredit', 'status': 'succeed'}))
+    #return Response(f"User: {user_id} credit updated to: {user_entry.credit}", status=200)
 
 def handle_process_payment(data):
     logger.info("Process payment")
@@ -130,15 +144,23 @@ def handle_process_payment(data):
             db.set(user_id, msgpack.encode(user_entry))
         except redis.exceptions.RedisError:
             return abort(400, DB_ERROR_STR)
-        publish_event('payment_events', 'PaymentSuccessful', {
+        publish_event('events', 'PaymentSuccessfulOrder', {
             'order_id': order_id,
             'user_id': user_id,
             'total_cost': total_cost,
             'items': items
         })
+        publish_event('events', 'PaymentSuccessfulStock', {
+            'order_id': order_id,
+            'user_id': user_id,
+            'total_cost': total_cost,
+            'items': items
+        })
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'ProcessPayment', 'status': 'succeed'}))
         logger.info(f"Payment successful for order: {order_id}")
     else:
-        publish_event('payment_events', 'PaymentFailed', {
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'ProcessPayment', 'status': 'failed'}))
+        publish_event('events', 'PaymentFailed', {
             'order_id': order_id,
         })
         logger.info(f"Payment failed for order: {order_id}")
@@ -152,10 +174,12 @@ def handle_issue_refund(data):
     try:
         db.set(user_id, msgpack.encode(user_entry))
     except redis.exceptions.RedisError:
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'IssueRefund', 'status': 'failed'}))
         return abort(400, DB_ERROR_STR)
-    publish_event('payment_events', 'RefundIssued', {
+    publish_event('events', 'RefundIssued', {
         'order_id': order_id,
     })
+    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'IssueRefund', 'status': 'succeed'}))
     logger.info(f"Refund issued for order: {order_id}")
 
 # def handle_event(event):
@@ -179,24 +203,16 @@ def process_event(ch, method, properties, body):
         handle_process_payment(data)
     elif event_type == "IssueRefund":
         handle_issue_refund(data)
+    elif event_type == "CreateUser":
+        create_user()
+    elif event_type == "AddCredit":
+        add_credit(data['user_id'], data['amount'])
+    elif event_type == "RemoveCredit":
+        remove_credit(data['user_id'], data['amount'])
 
-# def process_event_queue():
-#     while True:
-#         logger.debug(event_queue.get())
-#         event = event_queue.get()
-#         logger.info(f"Event: {event}")
-#         handle_event(event)
-#         event_queue.task_done()
-#
-#
-# # Start a few worker threads
-# for i in range(5):
-#     worker = Thread(target=process_event_queue)
-#     worker.daemon = True
-#     worker.start()
 
-subscriber_thread = Thread(target=start_subscriber, args=('order_events', process_event))
-subscriber_thread.start()
+
+start_subscriber('events', process_event)
 
 
 if __name__ == '__main__':
