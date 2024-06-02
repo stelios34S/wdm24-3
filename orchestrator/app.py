@@ -25,6 +25,15 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 logging.getLogger("pika").setLevel(logging.WARNING)
+###########WE DO HTTPS REQUESTS TO ORCHESTRATOR
+############## ORCHESTRATOR SENDS MESSAGES  TO SERVICES,
+############## SERVICES SEND MESSAGES TO EACH OTHER,
+############## AND THE FINAL SERVICE THAT FINISHES ITS JOB, SENDS HTTP REQUEST TO ORCHESTRATOR
+############## SO ORCHESTARTOR TAKES THE FINAL ACK MESSAGE FROM THE SERVICE THAT IT FINISHES
+############### AND SENDS IT BACK TO THE USER AS A RESPONSE
+
+
+
 
 #----------------------------------IDEA FOR ACKS NEW IDEA-------------------------------------------------------------
 #SO WE CAN POSSIBLY CREATE A NEW ENDPOINT IN THE ORCHESTRATOR THAT JUST WAITS FOR ACKS.
