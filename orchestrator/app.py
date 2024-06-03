@@ -48,9 +48,9 @@ def get_ack_queue(correlation_id):
 @app.route('/acks', methods=['POST'])
 def ack_endpoint():
     try:
-        ack_data = request.json
+        ack_data = json.loads(request.json)
         logger.info(f"Received ack: {ack_data}")
-        correlation_id = ack_data.get('correlation_id')
+        correlation_id = ack_data['correlation_id']
         if correlation_id and correlation_id in ack_queues:
             ack_queues[correlation_id].put(ack_data)
         logger.info(f"Received ack: {ack_data}")
@@ -65,7 +65,7 @@ def await_ack(correlation_id, timeout=ACK_TIMEOUT):
     try:
         ack_data = ack_queue.get(timeout=timeout)
         return ack_data
-    except not Queue.not_empty:
+    except Exception:
         raise TimeoutError("ACK timed out")
 
 
@@ -81,7 +81,7 @@ def create_order(user_id: str):
         ###await for ack in queue to return response to user (200 or 400)
         ##create order success or failure
         ack = await_ack(key)
-        if ack.get("type")== "CreateOrder" and ack.get('status') == 'succeed':
+        if ack.get("type")== "CreateOrder" and ack.get('status') == 'succeeded':
             return Response("Order Created", status=200)
         else:
             return abort(400, DB_ERROR_STR)
@@ -98,9 +98,9 @@ def checkout(order_id: str):
         publish_event("events", "Checkout", json.dumps(data))
         logger.info("Checkout initiated")
         ack = await_ack(order_id)
-        if ack.get('type')== 'Checkout' and ack.get('status') == 'succeed':
+        if ack.get('type')== 'Checkout' and ack.get('status') == 'succeeded':
             return Response("Checkout succeeded", status=200)
-        if ack.get('type') == 'IssueRefund' and ack.get('status') == 'succeed':
+        if ack.get('type') == 'IssueRefund' and ack.get('status') == 'succeeded':
             return Response("Refund issued", status=200)
         else:
             return abort(400, DB_ERROR_STR)
@@ -116,7 +116,7 @@ def add_item(order_id: str, item_id: str, quantity: int):
         data = {"order_id": order_id, "item_id": item_id, "quantity": quantity}
         publish_event("events", "AddItem", json.dumps(data))
         ack = await_ack(order_id)
-        if ack.get('type') == 'AddItem' and ack.get('status') == 'succeed':
+        if ack.get('type') == 'AddItem' and ack.get('status') == 'succeeded':
             return Response("Item added to order", status=200)
         else:
             return abort(400, DB_ERROR_STR)
@@ -135,7 +135,7 @@ def create_user():
         data = {"user_id": key}
         publish_event("events", "CreateUser", json.dumps(data))
         ack = await_ack(key)
-        if ack.get('type') == 'CreateUser' and ack.get('status') == 'succeed':
+        if ack.get('type') == 'CreateUser' and ack.get('status') == 'succeeded':
             return Response(f"User: {key} created", status=200)
         else:
             return abort(400, DB_ERROR_STR)
@@ -151,7 +151,7 @@ def add_credit(user_id: str, amount: int):
         data = {"user_id": user_id, "amount": amount}
         publish_event("events", "AddCredit", json.dumps(data))
         ack = await_ack(user_id)
-        if ack.get('type') == 'AddCredit' and ack.get('status') == 'succeed':
+        if ack.get('type') == 'AddCredit' and ack.get('status') == 'succeeded':
             return Response(f"User: {user_id} credit is beging updated", status=200)
         else:
             return abort(400, DB_ERROR_STR)
@@ -168,7 +168,7 @@ def remove_credit(user_id: str, amount: int):
         data = {"user_id": user_id, "amount": amount}
         publish_event("events", "RemoveCredit", json.dumps(data))
         ack = await_ack(user_id)
-        if ack.get('type') == 'RemoveCredit' and ack.get('status') == 'succeed':
+        if ack.get('type') == 'RemoveCredit' and ack.get('status') == 'succeeded':
             return Response(f"User: {user_id} credit is  updated", status=200)
         else:
             return abort(400, DB_ERROR_STR)
@@ -189,7 +189,7 @@ def create_item(price: int):
         publish_event("events", "CreateItem", json.dumps(data))
         ###await for ack in queue to return response to user (200 or 400)
         ack = await_ack(key)
-        if ack.get('type') == 'CreateItem' and ack.get('status') == 'succeed':
+        if ack.get('type') == 'CreateItem' and ack.get('status') == 'succeeded':
             return Response(f"Item: {key} is created", status=200)
         else:
             return abort(400, DB_ERROR_STR)
@@ -204,7 +204,7 @@ def add_stock(item_id: str, amount: int):
         publish_event("events", "AddStock", json.dumps(data))
         ###await for ack in queue to return response to user (200 or 400)
         ack = await_ack(item_id)
-        if ack.get('type') == 'AddStock' and ack.get('status') == 'succeed':
+        if ack.get('type') == 'AddStock' and ack.get('status') == 'succeeded':
             return Response(f"Item: {item_id} stock is updated", status=200)
         else:
             return abort(400, DB_ERROR_STR)
@@ -219,7 +219,7 @@ def remove_stock(item_id: str, amount: int):
         data = {"item_id": item_id, "amount": amount}
         publish_event("events", "RemoveStock", json.dumps(data))
         ack = await_ack(item_id)
-        if ack.get('type') == 'RemoveStock' and ack.get('status') == 'succeed':
+        if ack.get('type') == 'RemoveStock' and ack.get('status') == 'succeeded':
             return Response(f"Item: {item_id} stock is updated", status=200)
         else:
             return abort(400, DB_ERROR_STR)

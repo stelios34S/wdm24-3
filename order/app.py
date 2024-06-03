@@ -243,9 +243,8 @@ def handle_stock_failed(data):
 def process_event(ch, method, properties, body):
     event = json.loads(body)
     event_type = event['type']
-    data = event['data']
+    data = json.loads(event['data'])
     if event_type == 'OrderCreation':
-        logger.info(f"Order created: {data}")
         create_order(data)
     if event_type == 'AddItem':
         add_item(data)

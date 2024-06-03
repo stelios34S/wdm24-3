@@ -56,15 +56,13 @@ def rpc_call(queue_name, event_type, data, response_queue_name, timeout=30):
     connection.close()
     return response
 
-def publish_event(queue_name, event_type, data, reply_to=None, correlation_id=None):
+def publish_event(queue_name, event_type, data):
     try:
         event = {'type': event_type, 'data': data}
-        properties = pika.BasicProperties(reply_to=reply_to, correlation_id=correlation_id)
         channel.basic_publish(
-            exchange='',
+            exchange="",
             routing_key=queue_name,
             body=json.dumps(event),
-            properties=properties
         )
         print(f"Published event to {queue_name}: {event}")
     except pika.exceptions.AMQPError:
@@ -78,25 +76,4 @@ def start_subscriber(queue_name, callback):
     pika.logging.info(f"Waiting for messages in {queue_name}. To exit press CTRL+C")
     channel.start_consuming()
 
-    def rpc_call(queue_name, event_type, data, response_queue_name, timeout=30):
-        correlation_id = str(uuid.uuid4())
-        response = None
-        response_queue = []
 
-        def on_response(ch, method, properties, body):
-            if properties.correlation_id == correlation_id:
-                response_queue.append(json.loads(body))
-
-        channel.queue_declare(queue=response_queue_name)
-        channel.basic_consume(queue=response_queue_name, on_message_callback=on_response, auto_ack=True)
-
-        publish_event(queue_name, event_type, data, reply_to=response_queue_name, correlation_id=correlation_id)
-
-        start_time = time.time()
-        while not response_queue:
-            if time.time() - start_time > timeout:
-                raise TimeoutError("RPC call timed out")
-            connection.process_data_events()
-        response = response_queue.pop(0)
-        connection.close()
-        return response
