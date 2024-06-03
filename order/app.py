@@ -69,17 +69,17 @@ def get_order_from_db(order_id: str) -> OrderValue | None: ###Does not need to g
 
 
 # @app.post('/create/<user_id>')
-def create_order(user_id: str): #### ENDPOINT TRANSFERRED TO ORCHESTRATOR
-    key = str(uuid.uuid4())
+def create_order(key : str,user_id: str): #### ENDPOINT TRANSFERRED TO ORCHESTRATOR
+
 
     value = msgpack.encode(OrderValue(paid=False, items=[], user_id=user_id, total_cost=0))
     try:
         db.set(key, value)
         logger.info(f"Order created: {key}, for user {user_id}")
     except redis.exceptions.RedisError:
-        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'CreateOrder', 'status': 'failed', 'correlation_id':  user_id}))
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'CreateOrder', 'status': 'failed', 'correlation_id':  key}))
         abort(400, DB_ERROR_STR)
-    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'CreateOrder', 'status': 'succeeded', 'correlation_id': user_id}))
+    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'CreateOrder', 'status': 'succeeded', 'correlation_id': key}))
 
 
 @app.post('/batch_init/<n>/<n_items>/<n_users>/<item_price>') ###Does not need to get transferred
@@ -264,7 +264,7 @@ def process_event(ch, method, properties, body):
     data = event['data']
     if event_type == 'OrderCreation':
         logger.info(f"Order created: {data}")
-        create_order(data)
+        create_order(data[0], data[1])
     if event_type == 'AddItem':
         add_item(data[0], data[1], data[2])
     if event_type == 'Checkout':

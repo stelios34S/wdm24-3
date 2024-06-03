@@ -74,11 +74,13 @@ def await_ack(correlation_id, timeout=ACK_TIMEOUT):
 @app.post('/create/<user_id>')
 def create_order(user_id: str):
     try:
-        publish_event("events", "OrderCreation", json.dumps(user_id))
+        key = str(uuid.uuid4())
+        data = {"order_id": key, "user_id": user_id}
+        publish_event("events", "OrderCreation", json.dumps(data))
         # logger.info(f"Order created: {key}, for user {user_id}")
         ###await for ack in queue to return response to user (200 or 400)
         ##create order success or failure
-        ack = await_ack(user_id)
+        ack = await_ack(key)
         if ack.get('status') == 'succeed':
             return Response("Order Created", status=200)
         else:
