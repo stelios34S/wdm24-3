@@ -1,4 +1,15 @@
 version: "3"
+
+x-redis-order-base: &redis-order-base
+    image: docker.io/bitnami/redis-cluster:7.2
+    env_file:
+      - env/order_redis_cluster.env
+
+x-redis-stock-base: &redis-stock-base
+    image: docker.io/bitnami/redis-cluster:7.2
+    env_file:
+      - env/stock_redis_cluster.env
+
 services:
 
   rabbitmq:
@@ -28,59 +39,47 @@ services:
       - env/order_redis_cluster.env
     depends_on:
       - rabbitmq
-      - redis-node-0
-      - redis-node-1
-      - redis-node-2
-      - redis-node-3
-      - redis-node-4
-      - redis-node-5
+      - redis-order-0
+      - redis-order-1
+      - redis-order-2
+      - redis-order-3
+      - redis-order-4
+      - redis-order-5
 
   # order-db:
   #   image: redis:7.2-bookworm
   #   command: redis-server --requirepass redis --maxmemory 512mb
   
-  redis-node-0:
-    image: docker.io/bitnami/redis-cluster:7.2
-    env_file:
-      - env/order_redis_cluster.env
-  
-  redis-node-1:
-    image: docker.io/bitnami/redis-cluster:7.2
-    env_file:
-      - env/order_redis_cluster.env
-  
-  redis-node-2:
-    image: docker.io/bitnami/redis-cluster:7.2
-    env_file:
-      - env/order_redis_cluster.env
-  
-  redis-node-3:
-    image: docker.io/bitnami/redis-cluster:7.2
-    env_file:
-      - env/order_redis_cluster.env
-  
-  redis-node-4:
-    image: docker.io/bitnami/redis-cluster:7.2
-    env_file:
-      - env/order_redis_cluster.env
+  redis-order-0:
+    <<: *redis-order-base
 
-  redis-node-5:
-    image: docker.io/bitnami/redis-cluster:7.2
+  redis-order-1:
+    <<: *redis-order-base
+  
+  redis-order-2:
+    <<: *redis-order-base
+  
+  redis-order-3:
+    <<: *redis-order-base
+  
+  redis-order-4:
+    <<: *redis-order-base
+
+  redis-order-5:
+    <<: *redis-order-base
     ports:
       - 6379:6379
       - 16379:16379
-    env_file:
-      - env/order_redis_cluster.env
     environment:
       - 'REDIS_CLUSTER_REPLICAS=1'
       - 'REDIS_CLUSTER_CREATOR=yes'
     depends_on:
-      - redis-node-0
-      - redis-node-1
-      - redis-node-2
-      - redis-node-3
-      - redis-node-4
-
+      - redis-order-0
+      - redis-order-1
+      - redis-order-2
+      - redis-order-3
+      - redis-order-4
+    
   stock-service:
     build: ./stock
     image: stock:latest
@@ -89,59 +88,42 @@ services:
       - env/stock_redis_cluster.env
     depends_on:
       - rabbitmq
-      - redis-node-10
-      - redis-node-11
-      - redis-node-12
-      - redis-node-13
-      - redis-node-14
-      - redis-node-15
-      
-  # stock-db:
-  #   image: redis:7.2-bookworm
-  #   command: redis-server --requirepass redis --maxmemory 512mb
+      - redis-stock-0
+      - redis-stock-1
+      - redis-stock-2
+      - redis-stock-3
+      - redis-stock-4
+      - redis-stock-5
 
-  redis-node-10:
-    image: docker.io/bitnami/redis-cluster:7.2
-    env_file:
-      - env/stock_redis_cluster.env
-  
-  redis-node-11:
-    image: docker.io/bitnami/redis-cluster:7.2
-    env_file:
-      - env/stock_redis_cluster.env
-  
-  redis-node-12:
-    image: docker.io/bitnami/redis-cluster:7.2
-    env_file:
-      - env/stock_redis_cluster.env
-  
-  redis-node-13:
-    image: docker.io/bitnami/redis-cluster:7.2
-    env_file:
-      - env/stock_redis_cluster.env
-  
-  redis-node-14:
-    image: docker.io/bitnami/redis-cluster:7.2
-    env_file:
-      - env/stock_redis_cluster.env
-  
-  redis-node-15:
-    image: docker.io/bitnami/redis-cluster:7.2
+  redis-stock-0:
+    <<: *redis-stock-base
     ports:
       - 6380:6380
       - 16380:16380
-    env_file:
-      - env/stock_redis_cluster.env
     environment:
       - 'REDIS_CLUSTER_REPLICAS=1'
       - 'REDIS_CLUSTER_CREATOR=yes'
     depends_on:
-      - redis-node-10
-      - redis-node-11
-      - redis-node-12
-      - redis-node-13
-      - redis-node-14
+      - redis-stock-1
+      - redis-stock-2
+      - redis-stock-3
+      - redis-stock-4
+      - redis-stock-5
+  
+  redis-stock-1:
+    <<: *redis-stock-base
+  
+  redis-stock-2:
+    <<: *redis-stock-base
+  
+  redis-stock-3:
+    <<: *redis-stock-base
 
+  redis-stock-4:
+    <<: *redis-stock-base
+  
+  redis-stock-5:
+    <<: *redis-stock-base
 
   payment-service:
     build: ./payment
