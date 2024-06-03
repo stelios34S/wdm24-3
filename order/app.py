@@ -180,7 +180,7 @@ def checkout(data): #### ENDPOINT TRANSFERRED TO ORCHESTRATOR
     order_id = data['order_id']
     try:
         order_entry: OrderValue = get_order_from_db(order_id)
-        publish_event("events", "ProcessPayment", {
+        publish_event("events_payment", "ProcessPayment", {
             'order_id': order_id,
             'user_id': order_entry.user_id,
             'total_cost': order_entry.total_cost,
@@ -230,7 +230,7 @@ def handle_stock_reserved(data):
 def handle_stock_failed(data):
     order_id = data['order_id']
     order_entry: OrderValue = get_order_from_db(order_id)
-    publish_event('events', 'IssueRefund', {
+    publish_event('events_payment', 'IssueRefund', {
         'order_id': order_id,
         'user_id': order_entry.user_id,
         'total_cost': order_entry.total_cost
@@ -263,7 +263,7 @@ def process_event(ch, method, properties, body):
 
 
 
-start_subscriber('events', process_event)
+start_subscriber('events_order', process_event)
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)

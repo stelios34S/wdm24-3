@@ -157,13 +157,13 @@ def handle_payment_successful(data):
                 db.set(item_id, msgpack.encode(item_entry))
             except redis.exceptions.RedisError:
                 return abort(400, DB_ERROR_STR)
-        publish_event('events', 'StockReserved', {
+        publish_event('events_order', 'StockReserved', {
             'order_id': order_id,
         })
         #send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'Checkout', 'status': 'succeed'}))
     else:
         #send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'PaymentSuccessful', 'status': 'failed'}))
-        publish_event('events', 'StockFailed', {
+        publish_event('events_order', 'StockFailed', {
             'order_id': order_id,
         })
 

@@ -147,13 +147,13 @@ def handle_process_payment(data):
             db.set(user_id, msgpack.encode(user_entry))
         except redis.exceptions.RedisError:
             abort(400, DB_ERROR_STR)
-        publish_event('events', 'PaymentSuccessfulOrder', {
+        publish_event('events_order', 'PaymentSuccessfulOrder', {
             'order_id': order_id,
             'user_id': user_id,
             'total_cost': total_cost,
             'items': items
         })
-        publish_event('events', 'PaymentSuccessfulStock', {
+        publish_event('events_stock', 'PaymentSuccessfulStock', {
             'order_id': order_id,
             'user_id': user_id,
             'total_cost': total_cost,
@@ -162,7 +162,7 @@ def handle_process_payment(data):
         #send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'Checkout', 'status': 'payment_successful'}))
         logger.info(f"Payment successful for order: {order_id}")
     else:
-        publish_event('events', 'PaymentFailed', {
+        publish_event('events_order', 'PaymentFailed', {
             'order_id': order_id,
         })
         logger.info(f"Payment failed for order: {order_id}")
@@ -179,7 +179,7 @@ def handle_issue_refund(data):
     except redis.exceptions.RedisError:
         send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'IssueRefund', 'status': 'failed','correlation_id': order_id}))
         abort(400, DB_ERROR_STR)
-    publish_event('events', 'RefundIssued', {
+    publish_event('events_order', 'RefundIssued', {
         'order_id': order_id,
     })
     #send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'IssueRefund', 'status': 'succeed'}))
@@ -204,7 +204,7 @@ def process_event(ch, method, properties, body):
 
 
 
-start_subscriber('events', process_event)
+start_subscriber('events_payment', process_event)
 
 
 if __name__ == '__main__':
