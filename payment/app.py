@@ -62,7 +62,7 @@ def get_user_from_db(user_id: str) -> UserValue | None:
 
 #@app.post('/create_user') ####transfer to orchestrator
 def create_user(data):
-    key = data.get('user_id')
+    key = data['user_id']
     value = msgpack.encode(UserValue(credit=0))
 
     try:
@@ -100,7 +100,9 @@ def find_user(user_id: str):
 
 
 #@app.post('/add_funds/<user_id>/<amount>') #####transfer to orchestrator
-def add_credit(user_id: str, amount: int):
+def add_credit(data):
+    user_id = data["user_id"]
+    amount = data["amount"]
     user_entry: UserValue = get_user_from_db(user_id)
     # update credit, serialize and update database
     user_entry.credit += int(amount)
@@ -114,7 +116,9 @@ def add_credit(user_id: str, amount: int):
 
 
 #@app.post('/pay/<user_id>/<amount>') #####transfer to orchestrator
-def remove_credit(user_id: str, amount: int):
+def remove_credit(data):
+    user_id= data["user_id"]
+    amount = data["amount"]
     logger.info(f"Removing {amount} credit from user: {user_id}")
     user_entry: UserValue = get_user_from_db(user_id)
     # update credit, serialize and update database
@@ -194,9 +198,9 @@ def process_event(ch, method, properties, body):
     elif event_type == "CreateUser":
         create_user(data)
     elif event_type == "AddCredit":
-        add_credit(data['user_id'], data['amount'])
+        add_credit(data)
     elif event_type == "RemoveCredit":
-        remove_credit(data['user_id'], data['amount'])
+        remove_credit(data)
 
 
 

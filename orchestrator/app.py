@@ -81,7 +81,7 @@ def create_order(user_id: str):
         ###await for ack in queue to return response to user (200 or 400)
         ##create order success or failure
         ack = await_ack(key)
-        if ack.get('status') == 'succeed':
+        if ack.get("type")== "CreateOrder" and ack.get('status') == 'succeed':
             return Response("Order Created", status=200)
         else:
             return abort(400, DB_ERROR_STR)
@@ -94,7 +94,8 @@ def create_order(user_id: str):
 def checkout(order_id: str):
     try:
         logger.debug(f"Checking out {order_id}")
-        publish_event("events", "Checkout", json.dumps(order_id))
+        data = {"order_id": order_id}
+        publish_event("events", "Checkout", json.dumps(data))
         logger.info("Checkout initiated")
         ack = await_ack(order_id)
         if ack.get('type')== 'Checkout' and ack.get('status') == 'succeed':

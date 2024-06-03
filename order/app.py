@@ -69,8 +69,9 @@ def get_order_from_db(order_id: str) -> OrderValue | None: ###Does not need to g
 
 
 # @app.post('/create/<user_id>')
-def create_order(key : str,user_id: str): #### ENDPOINT TRANSFERRED TO ORCHESTRATOR
-
+def create_order(data): #### ENDPOINT TRANSFERRED TO ORCHESTRATOR
+    key = data['order_id']
+    user_id = data['user_id']
 
     value = msgpack.encode(OrderValue(paid=False, items=[], user_id=user_id, total_cost=0))
     try:
@@ -144,7 +145,10 @@ def send_get_request(url: str):
 
 
 # @app.post('/addItem/<order_id>/<item_id>/<quantity>')
-def add_item(order_id: str, item_id: str, quantity: int): #### ENDPOINT TRANSFERRED TO ORCHESTRATOR
+def add_item(data): #### ENDPOINT TRANSFERRED TO ORCHESTRATOR
+    order_id = data['order_id']
+    item_id = data['item_id']
+    quantity = data['quantity']
     order_entry: OrderValue = get_order_from_db(order_id)
     item_reply =  send_get_request(f"{GATEWAY_URL}/stock/find/{item_id}")
     if item_reply.status_code != 200:
@@ -165,29 +169,6 @@ def add_item(order_id: str, item_id: str, quantity: int): #### ENDPOINT TRANSFER
                                                                        'total_cost': order_entry.total_cost}}))
 
 
-# def add_item(order_id: str, item_id: str, quantity: int):
-#     try:
-#         response = rpc_call('events', 'CheckStock', {'item_id': item_id}, 'events')
-#         if response['status'] == 'success':
-#             item_price = response['data']['price']
-#             order_entry = get_order_from_db(order_id)
-#             order_entry.items.append((item_id, int(quantity)))
-#             order_entry.total_cost += int(quantity) * item_price
-#             db.set(order_id, msgpack.encode(order_entry))
-#             logger.info(f"Item: {item_id} added to: {order_id} price updated to: {order_entry.total_cost}")
-#             send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'ItemAdded', 'status': 'succeeded','data': {'order_id': order_id, 'total_cost': order_entry.total_cost}}))
-#             # return jsonify({'status': 'Item added to order', 'order_id': order_id, 'total_cost': order_entry.total_cost}), 200 ##make this an ack
-#         else:
-#             send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'ItemAdded', 'status': 'failed'}))
-#             return jsonify({'status': 'failed', 'error': response['data']['error']}), 400
-#     except TimeoutError as e:
-#         logger.error(f"Timeout while checking stock: {e}")
-#         return jsonify({'status': 'failed', 'error': 'Stock check timed out'}), 500
-#     except Exception as e:
-#         logger.error(f"Error adding item to order: {e}")
-#         return jsonify({'status': 'failed', 'error': str(e)}), 500
-
-
 #####STILL UNSURE ABOUT THIS METHOF
 def rollback_stock(removed_items: list[tuple[str, int]]):
     for item_id, quantity in removed_items:
@@ -195,7 +176,8 @@ def rollback_stock(removed_items: list[tuple[str, int]]):
 
 
 # @app.post('/checkout/<order_id>')
-def checkout(order_id: str): #### ENDPOINT TRANSFERRED TO ORCHESTRATOR
+def checkout(data): #### ENDPOINT TRANSFERRED TO ORCHESTRATOR
+    order_id = data['order_id']
     try:
         order_entry: OrderValue = get_order_from_db(order_id)
         publish_event("events", "ProcessPayment", {
@@ -264,9 +246,9 @@ def process_event(ch, method, properties, body):
     data = event['data']
     if event_type == 'OrderCreation':
         logger.info(f"Order created: {data}")
-        create_order(data[0], data[1])
+        create_order(data)
     if event_type == 'AddItem':
-        add_item(data[0], data[1], data[2])
+        add_item(data)
     if event_type == 'Checkout':
         checkout(data)
     if event_type == 'RefundIssued':

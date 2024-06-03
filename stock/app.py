@@ -65,7 +65,9 @@ def get_item_from_db(item_id: str) -> StockValue | None:
 
 
 # @app.post('/item/create/<price>')
-def create_item(price: int,key : str): ####Transfered to orchestrator
+def create_item(data): ####Transfered to orchestrator
+    price = data["price"]
+    key = data["item_id"]
     app.logger.debug(f"Item: {key} created")
     value = msgpack.encode(StockValue(stock=0, price=int(price)))
     try:
@@ -79,9 +81,6 @@ def create_item(price: int,key : str): ####Transfered to orchestrator
 
 @app.post('/batch_init/<n>/<starting_stock>/<item_price>')
 def batch_init_users(n: int, starting_stock: int, item_price: int):
-    n = int(n)
-    starting_stock = int(starting_stock)
-    item_price = int(item_price)
     kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(StockValue(stock=starting_stock, price=item_price))
                                   for i in range(n)}
     try:
@@ -103,7 +102,9 @@ def find_item(item_id: str):
 
 
 #@app.post('/add/<item_id>/<amount>') ####Transfered to orchestrator
-def add_stock(item_id: str, amount: int):
+def add_stock(data):
+    item_id = data["item_id"]
+    amount = data["amount"]
     item_entry: StockValue = get_item_from_db(item_id)
     # update stock, serialize and update database
     item_entry.stock += int(amount)
@@ -117,7 +118,9 @@ def add_stock(item_id: str, amount: int):
 
 
 #@app.post('/subtract/<item_id>/<amount>') ###transfer to orchestrator
-def remove_stock(item_id: str, amount: int):
+def remove_stock(data):
+    item_id = data["item_id"]
+    amount = data["amount"]
     item_entry: StockValue = get_item_from_db(item_id)
     # update stock, serialize and update database
     item_entry.stock -= int(amount)
@@ -175,9 +178,9 @@ def process_event(ch, method, properties, body):
     if event_type == 'CreateItem':
         create_item(data)
     if event_type == 'AddStock':
-        add_stock(data[0],data[0])
+        add_stock(data)
     if event_type == 'RemoveStock':
-        remove_stock(data[0],data[0])
+        remove_stock(data)
 
 start_subscriber('events', process_event)
 
