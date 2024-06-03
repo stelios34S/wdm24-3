@@ -10,6 +10,11 @@ x-redis-stock-base: &redis-stock-base
     env_file:
       - env/stock_redis_cluster.env
 
+x-redis-payment-base: &redis-payment-base
+    image: docker.io/bitnami/redis-cluster:7.2
+    env_file:
+      - env/payment_redis_cluster.env
+
 services:
 
   rabbitmq:
@@ -130,11 +135,46 @@ services:
     image: payment:latest
     command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
     env_file:
-      - env/payment_redis.env
+      - env/payment_redis_cluster.env
     depends_on:
       - rabbitmq
-      - payment-db
+      - redis-payment-0
+      - redis-payment-1
+      - redis-payment-2
+      - redis-payment-3
+      - redis-payment-4
+      - redis-payment-5
 
-  payment-db:
-    image: redis:7.2-bookworm
-    command: redis-server --requirepass redis --maxmemory 512mb
+  # payment-db:
+  #   image: redis:7.2-bookworm
+  #   command: redis-server --requirepass redis --maxmemory 512mb
+
+  redis-payment-0:
+    <<: *redis-payment-base
+    ports:
+      - 6381:6381
+      - 16381:16381
+    environment:
+      - 'REDIS_CLUSTER_REPLICAS=1'
+      - 'REDIS_CLUSTER_CREATOR=yes'
+    depends_on:
+      - redis-payment-1
+      - redis-payment-2
+      - redis-payment-3
+      - redis-payment-4
+      - redis-payment-5
+  
+  redis-payment-1:
+    <<: *redis-payment-base
+  
+  redis-payment-2:
+    <<: *redis-payment-base
+  
+  redis-payment-3:
+    <<: *redis-payment-base
+
+  redis-payment-4:
+    <<: *redis-payment-base
+  
+  redis-payment-5:
+    <<: *redis-payment-base
