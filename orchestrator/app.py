@@ -78,19 +78,33 @@ def create_order(user_id: str):
         # logger.info(f"Order created: {key}, for user {user_id}")
         ###await for ack in queue to return response to user (200 or 400)
         ##create order success or failure
+        ack = await_ack(user_id)
+        if ack.get('status') == 'succeed':
+            return Response("Order Created", status=200)
+        else:
+            return abort(400, DB_ERROR_STR)
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
-    return Response("Order Created", status=200)
+
 
 
 @app.post('/checkout/<order_id>')
 def checkout(order_id: str):
-    logger.debug(f"Checking out {order_id}")
-    publish_event("events", "Checkout", json.dumps(order_id))
-    logger.info("Checkout initiated")
+    try:
+        logger.debug(f"Checking out {order_id}")
+        publish_event("events", "Checkout", json.dumps(order_id))
+        logger.info("Checkout initiated")
+        ack = await_ack(order_id)
+        if ack.get('type')== 'Checkout' and ack.get('status') == 'succeed':
+            return Response("Checkout succeeded", status=200)
+        if ack.get('type') == 'IssueRefund' and ack.get('status') == 'succeed':
+            return Response("Refund issued", status=200)
+        else:
+            return abort(400, DB_ERROR_STR)
+    except redis.exceptions.RedisError:
     ###await for ack in queue to return response to user (200 or 400) if checkout is successful return 200
     ### or expects an issuerefund message with succeed or failure
-    return Response("Checkout initiated", status=200)
+        return abort(400, REQ_ERROR_STR)
 
 
 @app.post('/addItem/<order_id>/<item_id>/<quantity>')
@@ -98,28 +112,34 @@ def add_item(order_id: str, item_id: str, quantity: int):
     try:
         data = {"order_id": order_id, "item_id": item_id, "quantity": quantity}
         publish_event("events", "AddItem", json.dumps(data))
-
+        ack = await_ack(order_id)
+        if ack.get('type') == 'AddItem' and ack.get('status') == 'succeed':
+            return Response("Item added to order", status=200)
+        else:
+            return abort(400, DB_ERROR_STR)
         ###await for ack in queue to return response to user (200 or 400)
         ###additem message success or failure
     except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-    return jsonify({"msg": "Item added to order"})
+        return abort(400, REQ_ERROR_STR)
 
 
 # ------------------------------------------------------------------------------------------------------------------
 # ----------------------------------PAYMENT SERVICE-------------------------------------------------------------
-@app.post('/create_user')  ####transfer to orchestrator
+@app.post('/create_user')
 def create_user():
     try:
         key = str(uuid.uuid4())
         data = {"user_id": key}
         publish_event("events", "CreateUser", json.dumps(data))
-
+        ack = await_ack(key)
+        if ack.get('type') == 'CreateUser' and ack.get('status') == 'succeed':
+            return Response(f"User: {key} created", status=200)
+        else:
+            return abort(400, DB_ERROR_STR)
         ###await for ack in queue to return response to user (200 or 400)
         ##create user message success or failure
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
-    return jsonify({'msg': 'User is being created'}), 200
 
 
 @app.post('/add_funds/<user_id>/<amount>')
@@ -127,12 +147,15 @@ def add_credit(user_id: str, amount: int):
     try:
         data = {"user_id": user_id, "amount": amount}
         publish_event("events", "AddCredit", json.dumps(data))
-
+        ack = await_ack(user_id)
+        if ack.get('type') == 'AddCredit' and ack.get('status') == 'succeed':
+            return Response(f"User: {user_id} credit is beging updated", status=200)
+        else:
+            return abort(400, DB_ERROR_STR)
         ###await for ack in queue to return response to user (200 or 400)
         ###addcredit message success or     failure
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
-    return Response(f"User: {user_id} credit is beging updated", status=200)
 
 
 @app.post('/pay/<user_id>/<amount>')
@@ -141,12 +164,15 @@ def remove_credit(user_id: str, amount: int):
     try:
         data = {"user_id": user_id, "amount": amount}
         publish_event("events", "RemoveCredit", json.dumps(data))
-
+        ack = await_ack(user_id)
+        if ack.get('type') == 'RemoveCredit' and ack.get('status') == 'succeed':
+            return Response(f"User: {user_id} credit is  updated", status=200)
+        else:
+            return abort(400, DB_ERROR_STR)
         ###await for ack in queue to return response to user (200 or 400)
         ### removecredit message success or failure
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
-    return Response(f"User: {user_id} credit is being updated", status=200)
 
 
 # ------------------------------------------------------------------------------------------------------------------
@@ -159,9 +185,13 @@ def create_item(price: int):
         data = {"price": price, "item_id": key}
         publish_event("events", "CreateItem", json.dumps(data))
         ###await for ack in queue to return response to user (200 or 400)
+        ack = await_ack(key)
+        if ack.get('type') == 'CreateItem' and ack.get('status') == 'succeed':
+            return Response(f"Item: {key} is created", status=200)
+        else:
+            return abort(400, DB_ERROR_STR)
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
-    return Response(f"Item: is being created", status=200)
 
 
 @app.post('/add/<item_id>/<amount>')  ####Transfered to orchestrator
@@ -170,9 +200,14 @@ def add_stock(item_id: str, amount: int):
         data = {"item_id": item_id, "amount": amount}
         publish_event("events", "AddStock", json.dumps(data))
         ###await for ack in queue to return response to user (200 or 400)
+        ack = await_ack(item_id)
+        if ack.get('type') == 'AddStock' and ack.get('status') == 'succeed':
+            return Response(f"Item: {item_id} stock is updated", status=200)
+        else:
+            return abort(400, DB_ERROR_STR)
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
-    return Response(f"Item: {item_id} stock is being updated", status=200)
+
 
 
 @app.post('/subtract/<item_id>/<amount>')  ###transfer to orchestrator
@@ -180,10 +215,14 @@ def remove_stock(item_id: str, amount: int):
     try:
         data = {"item_id": item_id, "amount": amount}
         publish_event("events", "RemoveStock", json.dumps(data))
+        ack = await_ack(item_id)
+        if ack.get('type') == 'RemoveStock' and ack.get('status') == 'succeed':
+            return Response(f"Item: {item_id} stock is updated", status=200)
+        else:
+            return abort(400, DB_ERROR_STR)
         ###await for ack in queue to return response to user (200 or 400)
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
-    return Response(f"Item: {item_id} stock is being updated", status=200)
 
 
 # ------------------------------------------------------------------------------------------------------------------
