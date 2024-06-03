@@ -25,7 +25,7 @@ services:
       - GATEWAY_URL=http://gateway:80
     command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
     env_file:
-      - env/order_redis.env
+      - env/order_redis_cluster.env
     depends_on:
       - rabbitmq
       - redis-node-0
@@ -41,62 +41,45 @@ services:
   
   redis-node-0:
     image: docker.io/bitnami/redis-cluster:7.2
-    environment:
-      - 'ALLOW_EMPTY_PASSWORD=yes'
-      - 'REDIS_CLUSTER_ANNOUNCE_IP=0.0.0.0'
-      - 'REDIS_CLUSTER_ANNOUNCE_PORT=6379'
-      - 'REDIS_NODES=redis-node-0 redis-node-1 redis-node-2 redis-node-3 redis-node-4 redis-node-5'
+    env_file:
+      - env/order_redis_cluster.env
   
   redis-node-1:
     image: docker.io/bitnami/redis-cluster:7.2
-    environment:
-      - 'ALLOW_EMPTY_PASSWORD=yes'
-      - 'REDIS_CLUSTER_ANNOUNCE_IP=0.0.0.0'
-      - 'REDIS_CLUSTER_ANNOUNCE_PORT=6379'
-      - 'REDIS_NODES=redis-node-0 redis-node-1 redis-node-2 redis-node-3 redis-node-4 redis-node-5'
+    env_file:
+      - env/order_redis_cluster.env
   
   redis-node-2:
     image: docker.io/bitnami/redis-cluster:7.2
-    environment:
-      - 'ALLOW_EMPTY_PASSWORD=yes'
-      - 'REDIS_CLUSTER_ANNOUNCE_IP=0.0.0.0'
-      - 'REDIS_CLUSTER_ANNOUNCE_PORT=6379'
-      - 'REDIS_NODES=redis-node-0 redis-node-1 redis-node-2 redis-node-3 redis-node-4 redis-node-5'
+    env_file:
+      - env/order_redis_cluster.env
   
   redis-node-3:
     image: docker.io/bitnami/redis-cluster:7.2
-    environment:
-      - 'ALLOW_EMPTY_PASSWORD=yes'
-      - 'REDIS_CLUSTER_ANNOUNCE_IP=0.0.0.0'
-      - 'REDIS_CLUSTER_ANNOUNCE_PORT=6379'
-      - 'REDIS_NODES=redis-node-0 redis-node-1 redis-node-2 redis-node-3 redis-node-4 redis-node-5'
+    env_file:
+      - env/order_redis_cluster.env
   
   redis-node-4:
     image: docker.io/bitnami/redis-cluster:7.2
-    environment:
-      - 'ALLOW_EMPTY_PASSWORD=yes'
-      - 'REDIS_CLUSTER_ANNOUNCE_IP=0.0.0.0'
-      - 'REDIS_CLUSTER_ANNOUNCE_PORT=6379'
-      - 'REDIS_NODES=redis-node-0 redis-node-1 redis-node-2 redis-node-3 redis-node-4 redis-node-5'
+    env_file:
+      - env/order_redis_cluster.env
 
   redis-node-5:
     image: docker.io/bitnami/redis-cluster:7.2
     ports:
       - 6379:6379
       - 16379:16379
+    env_file:
+      - env/order_redis_cluster.env
+    environment:
+      - 'REDIS_CLUSTER_REPLICAS=1'
+      - 'REDIS_CLUSTER_CREATOR=yes'
     depends_on:
       - redis-node-0
       - redis-node-1
       - redis-node-2
       - redis-node-3
       - redis-node-4
-    environment:
-      - 'ALLOW_EMPTY_PASSWORD=yes'
-      - 'REDIS_CLUSTER_ANNOUNCE_IP=0.0.0.0'
-      - 'REDIS_CLUSTER_ANNOUNCE_PORT=6379'
-      - 'REDIS_CLUSTER_REPLICAS=1'
-      - 'REDIS_NODES=redis-node-0 redis-node-1 redis-node-2 redis-node-3 redis-node-4 redis-node-5'
-      - 'REDIS_CLUSTER_CREATOR=yes'
 
   stock-service:
     build: ./stock

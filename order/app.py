@@ -8,7 +8,7 @@ import uuid
 from queue import Queue
 from collections import defaultdict
 
-import redis
+from redis.cluster import ClusterNode, RedisCluster
 import requests
 
 from msgspec import msgpack, Struct
@@ -33,13 +33,9 @@ logger = logging.getLogger(__name__)
 #                               password=os.environ['REDIS_PASSWORD'],
 #                               db=int(os.environ['REDIS_DB']))
 
-nodes = [redis.cluster.ClusterNode('redis-node-0', 6379), 
-         redis.cluster.ClusterNode('redis-node-1', 6379), 
-         redis.cluster.ClusterNode('redis-node-2', 6379), 
-         redis.cluster.ClusterNode('redis-node-3', 6379), 
-         redis.cluster.ClusterNode('redis-node-4', 6379), 
-         redis.cluster.ClusterNode('redis-node-5', 6379)]
-db = redis.cluster.RedisCluster(startup_nodes=nodes)
+host = os.environ['REDIS_NODES'].split()
+nodes = [ClusterNode(host=h, port=os.environ['REDIS_CLUSTER_ANNOUNCE_PORT']) for h in host]
+db = RedisCluster(startup_nodes=nodes)
 
 def close_db_connection():
     db.close()
@@ -101,7 +97,9 @@ def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
     kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(generate_entry())
                                   for i in range(n)}
     try:
-        db.mset(kv_pairs)
+        # db.mset(kv_pairs)
+        for k,v in kv_pairs.items():
+            db.set(k, v)
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
     return jsonify({"msg": "Batch init for orders successful"})
