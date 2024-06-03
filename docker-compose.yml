@@ -86,14 +86,62 @@ services:
     image: stock:latest
     command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
     env_file:
-      - env/stock_redis.env
+      - env/stock_redis_cluster.env
     depends_on:
       - rabbitmq
-      - stock-db
+      - redis-node-10
+      - redis-node-11
+      - redis-node-12
+      - redis-node-13
+      - redis-node-14
+      - redis-node-15
+      
+  # stock-db:
+  #   image: redis:7.2-bookworm
+  #   command: redis-server --requirepass redis --maxmemory 512mb
 
-  stock-db:
-    image: redis:7.2-bookworm
-    command: redis-server --requirepass redis --maxmemory 512mb
+  redis-node-10:
+    image: docker.io/bitnami/redis-cluster:7.2
+    env_file:
+      - env/stock_redis_cluster.env
+  
+  redis-node-11:
+    image: docker.io/bitnami/redis-cluster:7.2
+    env_file:
+      - env/stock_redis_cluster.env
+  
+  redis-node-12:
+    image: docker.io/bitnami/redis-cluster:7.2
+    env_file:
+      - env/stock_redis_cluster.env
+  
+  redis-node-13:
+    image: docker.io/bitnami/redis-cluster:7.2
+    env_file:
+      - env/stock_redis_cluster.env
+  
+  redis-node-14:
+    image: docker.io/bitnami/redis-cluster:7.2
+    env_file:
+      - env/stock_redis_cluster.env
+  
+  redis-node-15:
+    image: docker.io/bitnami/redis-cluster:7.2
+    ports:
+      - 6380:6380
+      - 16380:16380
+    env_file:
+      - env/stock_redis_cluster.env
+    environment:
+      - 'REDIS_CLUSTER_REPLICAS=1'
+      - 'REDIS_CLUSTER_CREATOR=yes'
+    depends_on:
+      - redis-node-10
+      - redis-node-11
+      - redis-node-12
+      - redis-node-13
+      - redis-node-14
+
 
   payment-service:
     build: ./payment

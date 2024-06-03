@@ -8,6 +8,7 @@ import uuid
 from queue import Queue
 from collections import defaultdict
 
+import redis
 from redis.cluster import ClusterNode, RedisCluster
 import requests
 
