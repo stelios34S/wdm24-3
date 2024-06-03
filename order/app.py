@@ -31,63 +31,16 @@ logging.getLogger("pika").setLevel(logging.WARNING)
 #                               password=os.environ['REDIS_PASSWORD'],
 #                               db=int(os.environ['REDIS_DB']))
 
-# db: redis.RedisCluster = redis.RedisCluster(
-#                             startup_nodes=[
-#                                 {"host": "127.0.0.1", "port": "7002"}
-#                             ],
-#                             decode_responses=True)
-
-# db: redis.cluster.RedisCluster = redis.cluster.RedisCluster (host=os.environ['REDIS_HOST'],
-#                                                              port=int(os.environ['REDIS_PORT']))
-
-# from rediscluster import RedisCluster
-# try:
-#     db = redis.Redis(host=os.environ['REDIS_HOST'], port=6371)
-# except Exception as e:
-#     logger.error(f"Error connecting to Redis: {e}")
-
-# startup_nodes = [{"host": "127.0.0.1", "port": "6379"}]
-
-# Note: decode_responses must be set to True when used with python3
-# db = RedisCluster(startup_nodes=startup_nodes, decode_responses=True)
 nodes = [redis.cluster.ClusterNode('redis-node-0', 6379), 
          redis.cluster.ClusterNode('redis-node-1', 6379), 
          redis.cluster.ClusterNode('redis-node-2', 6379), 
          redis.cluster.ClusterNode('redis-node-3', 6379), 
          redis.cluster.ClusterNode('redis-node-4', 6379), 
          redis.cluster.ClusterNode('redis-node-5', 6379)]
-
 db = redis.cluster.RedisCluster(startup_nodes=nodes)
-
-# redis_nodes = [{"host": node.split(':')[0], "port": node.split(':')[1]} for node in os.environ['REDIS_NODES'].split(',')]
-
-# # Initialize Redis Cluster connection
-# try:
-#     db = redis.cluster.RedisCluster(
-#         startup_nodes=redis_nodes, 
-#         password=os.environ.get('REDIS_PASSWORD'), 
-#         decode_responses=True
-#     )
-# except Exception as e:
-#     logger.error(f"Error connecting to Redis: {e}")
-#     db = None
 
 def close_db_connection():
     db.close()
-
-
-
-# def subscribe_to_events():
-#     pubsub = db.pubsub()
-#     pubsub.subscribe(['payment_events', 'stock_events'])
-#     logger.info("Subscribed to payment_events and stock_events channels.")
-#     for message in pubsub.listen():
-#         if message['type'] == 'message':
-#             event = Event.from_json(message['data'])
-#             event_queue.put(event)
-#
-# subscriber_thread = Thread(target=subscribe_to_events)
-# subscriber_thread.start()
 
 
 atexit.register(close_db_connection)
@@ -222,34 +175,6 @@ def checkout(order_id: str):
     return Response("Checkout initiated", status=200)
 
 
-# def publish_event(event_type, data):
-#     event = Event(event_type, data)
-#     test = db.publish('order_events', event.to_json())
-#     channels_subs = db.pubsub_channels()
-#     logger.info(f"Publishing event: {event.to_json()}")
-
-# def publish_event(event_type, data):
-#     event = {'type': event_type, 'data': data}
-#     channel.basic_publish(
-#         exchange='events',
-#         routing_key=event_type,
-#         body=json.dumps(event)
-#     )
-#     print(f"Published event: {event}")
-
-
-# def handle_event(event):
-#     data = event.data
-#     event_type = event.event_type
-#     if event_type == "PaymentSuccessful":
-#         handle_payment_successful(data)
-#     elif event_type == "PaymentFailed":
-#         handle_payment_failed(data)
-#     elif event_type == "StockReserved":
-#         handle_stock_reserved(data)
-#     elif event_type == "StockFailed":
-#         handle_stock_failed(data)
-
 def process_event(ch, method, properties, body):
     event = json.loads(body)
     event_type = event['type']
@@ -300,26 +225,6 @@ def handle_stock_failed(data):
     })
     logger.info(f"Stock failed for order: {order_id}")
 
-# def start_subscriber():
-#     channel.queue_declare(queue='order_queue')
-#     channel.queue_bind(exchange='events', queue='order_queue', routing_key='order_created')
-#
-#     # channel.basic_consume(queue='order_queue', on_message_callback=callback, auto_ack=True)
-#     # print('Waiting for messages. To exit press CTRL+C')
-#     # channel.start_consuming()
-#
-# def process_event_queue():
-#     while True:
-#         event = event_queue.get()
-#         handle_event(event)
-#         event_queue.task_done()
-#
-# # Start a few worker threads
-# for i in range(5):
-#     worker = Thread(target=process_event_queue)
-#     worker.daemon = True
-#     worker.start()
-#
 subscriber_thread = Thread(target=start_subscriber, args=('payment_events', process_event))
 subscriber_thread.start()
 subscriber_thread = Thread(target=start_subscriber, args=('stock_events', process_event))
