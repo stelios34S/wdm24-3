@@ -65,16 +65,15 @@ def get_item_from_db(item_id: str) -> StockValue | None:
 
 
 # @app.post('/item/create/<price>')
-def create_item(price: int): ####Transfered to orchestrator
-    key = str(uuid.uuid4())
+def create_item(price: int,key : str): ####Transfered to orchestrator
     app.logger.debug(f"Item: {key} created")
     value = msgpack.encode(StockValue(stock=0, price=int(price)))
     try:
         db.set(key, value)
     except redis.exceptions.RedisError:
-        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'CreateItem', 'status': 'failed'}))
-        #return abort(400, DB_ERROR_STR)
-    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'CreateItem', 'status': 'succeed'}))
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'CreateItem', 'status': 'failed','correlation_id': key}))
+        abort(400, DB_ERROR_STR)
+    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'CreateItem', 'status': 'succeed','correlation_id': key}))
     return jsonify({'item_id': key})
 
 
@@ -111,9 +110,9 @@ def add_stock(item_id: str, amount: int):
     try:
         db.set(item_id, msgpack.encode(item_entry))
     except redis.exceptions.RedisError:
-        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'AddStock', 'status': 'failed'}))
-        #return abort(400, DB_ERROR_STR)
-    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'AddStock', 'status': 'succeed'}))
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'AddStock', 'status': 'failed','correlation_id': item_id}))
+        abort(400, DB_ERROR_STR)
+    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'AddStock', 'status': 'succeed','correlation_id': item_id}))
     #return Response(f"Item: {item_id} stock updated to: {item_entry.stock}", status=200)
 
 
@@ -124,14 +123,14 @@ def remove_stock(item_id: str, amount: int):
     item_entry.stock -= int(amount)
     app.logger.debug(f"Item: {item_id} stock updated to: {item_entry.stock}")
     if item_entry.stock < 0:
-        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'RemoveStock', 'status': 'failed'}))
-        #abort(400, f"Item: {item_id} stock cannot get reduced below zero!")
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'RemoveStock', 'status': 'failed','correlation_id': item_id}))
+        abort(400, f"Item: {item_id} stock cannot get reduced below zero!")
     try:
         db.set(item_id, msgpack.encode(item_entry))
     except redis.exceptions.RedisError:
-        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'RemoveStock', 'status': 'failed'}))
-        #return abort(400, DB_ERROR_STR)
-    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'RemoveStock', 'status': 'succeed'}))
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'RemoveStock', 'status': 'failed','correlation_id': item_id}))
+        abort(400, DB_ERROR_STR)
+    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'RemoveStock', 'status': 'succeed','correlation_id': item_id}))
     #return Response(f"Item: {item_id} stock updated to: {item_entry.stock}", status=200)
 
 
@@ -158,9 +157,9 @@ def handle_payment_successful(data):
         publish_event('events', 'StockReserved', {
             'order_id': order_id,
         })
-        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'PaymentSuccessful', 'status': 'succeed'}))
+        #send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'Checkout', 'status': 'succeed'}))
     else:
-        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'PaymentSuccessful', 'status': 'failed'}))
+        #send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'PaymentSuccessful', 'status': 'failed'}))
         publish_event('events', 'StockFailed', {
             'order_id': order_id,
         })

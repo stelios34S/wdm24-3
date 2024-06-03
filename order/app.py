@@ -77,8 +77,9 @@ def create_order(user_id: str): #### ENDPOINT TRANSFERRED TO ORCHESTRATOR
         db.set(key, value)
         logger.info(f"Order created: {key}, for user {user_id}")
     except redis.exceptions.RedisError:
-        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'CreateOrder', 'status': 'failed'}))
-    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'CreateOrder', 'status': 'succeeded'}))
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'CreateOrder', 'status': 'failed', 'correlation_id':  user_id}))
+        abort(400, DB_ERROR_STR)
+    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'CreateOrder', 'status': 'succeeded', 'correlation_id': user_id}))
 
 
 @app.post('/batch_init/<n>/<n_items>/<n_users>/<item_price>') ###Does not need to get transferred
@@ -145,10 +146,10 @@ def send_get_request(url: str):
 # @app.post('/addItem/<order_id>/<item_id>/<quantity>')
 def add_item(order_id: str, item_id: str, quantity: int): #### ENDPOINT TRANSFERRED TO ORCHESTRATOR
     order_entry: OrderValue = get_order_from_db(order_id)
-    item_reply = send_get_request(f"{GATEWAY_URL}/stock/find/{item_id}")
+    item_reply =  send_get_request(f"{GATEWAY_URL}/stock/find/{item_id}")
     if item_reply.status_code != 200:
         # Request failed because item does not exist
-        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'ItemAdded', 'status': 'failed'}))
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'ItemAdded', 'status': 'failed', 'correlation_id': order_id}))
         abort(400, f"Item: {item_id} does not exist!")
     item_json: dict = item_reply.json()
     order_entry.items.append((item_id, int(quantity)))
@@ -157,12 +158,11 @@ def add_item(order_id: str, item_id: str, quantity: int): #### ENDPOINT TRANSFER
         db.set(order_id, msgpack.encode(order_entry))
         logger.info(f"Item: {item_id} added to: {order_id} price updated to: {order_entry.total_cost}")
     except redis.exceptions.RedisError:
-        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'ItemAdded', 'status': 'failed'}))
-        #return abort(400, DB_ERROR_STR)
-    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'ItemAdded', 'status': 'succeeded',
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'ItemAdded', 'status': 'failed', 'correlation_id': order_id}))
+        abort(400, REQ_ERROR_STR)
+    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'ItemAdded', 'status': 'succeeded','correlation_id': order_id,
                                                               'data': {'order_id': order_id,
                                                                        'total_cost': order_entry.total_cost}}))
-    #return Response(f"Item: {item_id} added to: {order_id} price updated to: {order_entry.total_cost}",status=200)
 
 
 # def add_item(order_id: str, item_id: str, quantity: int):
@@ -205,10 +205,57 @@ def checkout(order_id: str): #### ENDPOINT TRANSFERRED TO ORCHESTRATOR
             'items': order_entry.items,
         })
     except redis.exceptions.RedisError:
-        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'Checkout', 'status': 'failed'}))
-        #return abort(400, DB_ERROR_STR)
-    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'Checkout', 'status': 'initiated'}))
-    #return Response("Checkout initiated", status=200)
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'Checkout', 'status': 'failed', 'correlation_id': order_id}))
+        abort(400, DB_ERROR_STR)
+    #send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'Checkout', 'status': 'initiated'}))
+
+
+def handle_issue_refund(data):
+    order_id = data['order_id']
+    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'IssueRefund', 'status': 'succeed', 'correlation_id': order_id}))
+
+def handle_payment_successful(data):
+    order_id = data['order_id']
+    logger.info(f"Received payment, data: {data}")
+    order_entry: OrderValue = get_order_from_db(order_id)
+    order_entry.paid = True
+    try:
+        db.set(order_id, msgpack.encode(order_entry))
+        logger.info(f"Payment successful for order {order_id}")
+    except redis.exceptions.RedisError:
+        abort(400, DB_ERROR_STR)
+
+
+def handle_payment_failed(data):
+    order_id = data['order_id']
+    order_entry: OrderValue = get_order_from_db(order_id)
+    order_entry.paid = False
+    try:
+        db.set(order_id, msgpack.encode(order_entry))
+        logger.info(f"Payment failed for order {order_id}")
+        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'Checkout', 'status': 'failed', 'correlation_id': order_id}))
+    except redis.exceptions.RedisError:
+        abort(400, DB_ERROR_STR)
+
+
+def handle_stock_reserved(data):
+    order_id = data['order_id']
+    logger.debug(f"Checkout successful for order {order_id}")
+    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'Checkout', 'status': 'succeed', 'correlation_id': order_id}))
+
+
+
+def handle_stock_failed(data):
+    order_id = data['order_id']
+    order_entry: OrderValue = get_order_from_db(order_id)
+    publish_event('events', 'IssueRefund', {
+        'order_id': order_id,
+        'user_id': order_entry.user_id,
+        'total_cost': order_entry.total_cost
+    })
+    #send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'Stock', 'status': 'failed'})) ###???? maybe we dont need this
+    logger.info(f"Stock failed for order: {order_id}")
+
 
 
 def process_event(ch, method, properties, body):
@@ -233,49 +280,6 @@ def process_event(ch, method, properties, body):
     elif event_type == 'StockFailed':
         handle_stock_failed(data)
 
-def handle_issue_refund(data):
-    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'IssueRefund', 'status': 'succeed'}))
-def handle_payment_successful(data):
-    order_id = data['order_id']
-    logger.info(f"Received payment, data: {data}")
-    order_entry: OrderValue = get_order_from_db(order_id)
-    order_entry.paid = True
-    try:
-        db.set(order_id, msgpack.encode(order_entry))
-        logger.info(f"Payment successful for order {order_id}")
-    except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-
-
-def handle_payment_failed(data):
-    order_id = data['order_id']
-    order_entry: OrderValue = get_order_from_db(order_id)
-    order_entry.paid = False
-    try:
-        db.set(order_id, msgpack.encode(order_entry))
-        logger.info(f"Payment failed for order {order_id}")
-        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'PaymentFailed', 'status': 'succeed'}))
-    except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-
-
-def handle_stock_reserved(data):
-    order_id = data['order_id']
-    logger.debug(f"Checkout successful for order {order_id}")
-    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'Checkout', 'status': 'succeed'}))
-    return Response("Checkout successful", status=200)
-
-
-def handle_stock_failed(data):
-    order_id = data['order_id']
-    order_entry: OrderValue = get_order_from_db(order_id)
-    publish_event('events', 'IssueRefund', {
-        'order_id': order_id,
-        'user_id': order_entry.user_id,
-        'total_cost': order_entry.total_cost
-    })
-    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'HandleStockFailed', 'status': 'succeed'}))
-    logger.info(f"Stock failed for order: {order_id}")
 
 
 start_subscriber('events', process_event)
