@@ -9,11 +9,11 @@ Basic project structure with Python's Flask and Redis.
     Folder containing the Redis env variables for the docker-compose deployment
     
 * `helm-config` 
-   Helm chart values for Redis and ingress-nginx
-        
-* `k8s`
-    Folder containing the kubernetes deployments, apps and services for the ingress, order, payment and stock services.
-    
+    Helm chart values for Redis and ingress-nginx
+
+* `orchestrator`
+    Folder containing the orchestrator logic and dockerfile.
+
 * `order`
     Folder containing the order application logic and dockerfile. 
     
@@ -49,3 +49,9 @@ but you can find any database you want in https://artifacthub.io/ and adapt the 
 Similarly to the `minikube` deployment but run the `deploy-charts-cluster.sh` in the helm step to also install an ingress to the cluster. 
 
 ***Requirements:*** You need to have access to kubectl of a k8s cluster.
+
+### Consistency test
+
+In order for the consistency test to run on our codebase, it is necessary to change the `urls.json` file to the one 
+provided at the top level of this repository. This is due to the fact that the orchestrator server is the 'gateway' of our system
+hence all HTTP requests must go through there.
