@@ -85,6 +85,7 @@ def create_user(data):
 #@app.post('/batch_init/<n>/<starting_money>')
 def batch_init_users(data):
     n = data["n"]
+    key = data["key"]
     starting_money = data["starting_money"]
     starting_money = int(starting_money)
     kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(UserValue(credit=starting_money)) for i in range(n)}
@@ -93,9 +94,9 @@ def batch_init_users(data):
         # db.mset(kv_pairs)
         for k,v in kv_pairs.items():
             db.set(k, v)
-        publish_event('events_orchestrator', 'BatchInit', {'correlation_id': "BatchInitPayment", 'status': 'succeed'})
+        publish_event('events_orchestrator', 'BatchInit', {'correlation_id': "BatchInitPayment"+key, 'status': 'succeed'})
     except redis.exceptions.RedisError:
-        publish_event('events_orchestrator', 'BatchInit', {'correlation_id': "BatchInitPayment", 'status': 'failed'})
+        publish_event('events_orchestrator', 'BatchInit', {'correlation_id': "BatchInitPayment"+key, 'status': 'failed'})
         abort(400, DB_ERROR_STR)
 
 
