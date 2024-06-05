@@ -3,17 +3,17 @@ version: "3"
 x-redis-order-base: &redis-order-base
     image: docker.io/bitnami/redis-cluster:7.2
     env_file:
-      - env/order_redis_cluster.env
+      - env/order_redis.env
 
 x-redis-stock-base: &redis-stock-base
     image: docker.io/bitnami/redis-cluster:7.2
     env_file:
-      - env/stock_redis_cluster.env
+      - env/stock_redis.env
 
 x-redis-payment-base: &redis-payment-base
     image: docker.io/bitnami/redis-cluster:7.2
     env_file:
-      - env/payment_redis_cluster.env
+      - env/payment_redis.env
 
 services:
 
@@ -52,7 +52,7 @@ services:
     image: order:latest
     command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 60 --log-level=info app:app
     env_file:
-      - env/order_redis_cluster.env
+      - env/order_redis.env
     depends_on:
       - rabbitmq
       - redis-order-0
@@ -101,7 +101,7 @@ services:
     image: stock:latest
     command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 60 --log-level=info app:app
     env_file:
-      - env/stock_redis_cluster.env
+      - env/stock_redis.env
     depends_on:
       - rabbitmq
       - redis-stock-0
@@ -146,7 +146,7 @@ services:
     image: payment:latest
     command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 60 --log-level=info app:app
     env_file:
-      - env/payment_redis_cluster.env
+      - env/payment_redis.env
     depends_on:
       - rabbitmq
       - redis-payment-0
