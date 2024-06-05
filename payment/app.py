@@ -142,7 +142,6 @@ def remove_credit(data):
 
 
 def handle_process_payment(data):
-    logger.info("Process payment")
     user_id = data['user_id']
     order_id = data['order_id']
     total_cost = data['total_cost']
@@ -153,28 +152,29 @@ def handle_process_payment(data):
         try:
             db = get_db()
             db.set(user_id, msgpack.encode(user_entry))
+
+            publish_event('events_order', 'PaymentSuccessfulOrder', {
+                'order_id': order_id,
+                'user_id': user_id,
+                'total_cost': total_cost,
+                'items': items
+            })
+            publish_event('events_stock', 'PaymentSuccessfulStock', {
+                'order_id': order_id,
+                'user_id': user_id,
+                'total_cost': total_cost,
+                'items': items
+            })
+            logger.info(f"Payment successful for order: {order_id}")
         except redis.exceptions.RedisError:
             publish_event('events_order', 'PaymentFailed', {'order_id': order_id})
             abort(400, DB_ERROR_STR)
-        publish_event('events_order', 'PaymentSuccessfulOrder', {
-            'order_id': order_id,
-            'user_id': user_id,
-            'total_cost': total_cost,
-            'items': items
-        })
-        publish_event('events_stock', 'PaymentSuccessfulStock', {
-            'order_id': order_id,
-            'user_id': user_id,
-            'total_cost': total_cost,
-            'items': items
-        })
-        logger.info(f"Payment successful for order: {order_id}")
     else:
         publish_event('events_order', 'PaymentFailed', {
             'order_id': order_id,
         })
         logger.info(f"Payment failed for order: {order_id}")
-        abort(400, "Insufficient credit")
+        #abort(400, "Insufficient credit")
 
 def handle_issue_refund(data): #####maybe change order id to userid
     user_id = data['user_id']

@@ -184,7 +184,15 @@ def handle_payment_successful(data):
             'order_id': order_id,
         })
 
-
+def handle_find_item(data):
+    item_id = data['item_id']
+    try:
+        item_entry: StockValue = get_item_from_db(item_id)
+        publish_event("events_orchestrator", "FindItem",
+                      {"item_id": item_id, "stock": item_entry.stock, "price": item_entry.price, "status": "succeed", "correlation_id": item_id})
+    except redis.exceptions.RedisError:
+        publish_event("events_orchestrator", "FindItem",{"item_id": item_id, "status": "failed", "correlation_id": item_id})
+        abort(400, DB_ERROR_STR)
 
 def process_event(ch, method, properties, body):
     with app.app_context():
@@ -203,6 +211,8 @@ def process_event(ch, method, properties, body):
             find_item(data)
         if event_type == 'BatchInit':
             batch_init_users(data)
+        if event_type == 'FindItem':
+            handle_find_item(data)
 
 start_subscriber('events_stock', process_event)
 

@@ -78,8 +78,6 @@ def process_event(body):
 @app.post('/orders/create/<user_id>')
 def create_order(user_id: str):
     try:
-
-
         key = str(uuid.uuid4())
         data = {"order_id": key, "user_id": user_id}
         publish_event("events_order", "OrderCreation", data)
@@ -91,7 +89,7 @@ def create_order(user_id: str):
         logger.info(f'message received with ACK{ack_data}')
         ##ack = await_ack(key)
         if ack_data.get("type") == "CreateOrder" and ack_data['data'].get('status') == 'succeed':
-            return Response("Order Created", status=200)
+            return jsonify({'order_id': key})
         else:
             return abort(400, DB_ERROR_STR)
     except TimeoutError:
@@ -103,8 +101,6 @@ def create_order(user_id: str):
 @app.post('/orders/checkout/<order_id>')
 def checkout(order_id: str):
     try:
-
-
         logger.debug(f"Checking out {order_id}")
         data = {"order_id": order_id}
         publish_event("events_order", "Checkout", data)
@@ -116,9 +112,7 @@ def checkout(order_id: str):
         if ack_data.get('type') == 'IssueRefund' and ack_data['data'].get('status') == 'succeed':
             return Response("Refund issued", status=200)
         else:
-            return abort(400, DB_ERROR_STR)
-    except TimeoutError:
-        return abort(400, REQ_ERROR_STR)
+            abort(400, DB_ERROR_STR)
     except redis.exceptions.RedisError:
         ###await for ack in queue to return response to user (200 or 400) if checkout is successful return 200
         ### or expects an issuerefund message with succeed or failure
@@ -193,8 +187,6 @@ def find_order(order_id: str):
 @app.post('/payment/create_user')
 def create_user():
     try:
-
-
         key = str(uuid.uuid4())
         data = {"user_id": key}
         publish_event("events_payment", "CreateUser", data)
@@ -275,8 +267,6 @@ def batch_init_users_payment(n: int, starting_money: int):
 @app.get('/payment/find_user/<user_id>')
 def find_user(user_id: str):
     try:
-
-        ack_data = None
         data = {"user_id": user_id}
         publish_event("events_payment", "FindUser", data)
         start_subscriber('events_orchestrator', process_event, user_id)
@@ -321,7 +311,6 @@ def create_item(price: int):
 @app.post('/stock/add/<item_id>/<amount>')  ####Transfered to orchestrator
 def add_stock(item_id: str, amount: int):
     try:
-
         ack_data = None
         data = {"item_id": item_id, "amount": amount}
         publish_event("events_stock", "AddStock", data)
@@ -341,7 +330,6 @@ def add_stock(item_id: str, amount: int):
 @app.post('/stock/subtract/<item_id>/<amount>')  ###transfer to orchestrator
 def remove_stock(item_id: str, amount: int):
     try:
-
         ack_data = None
         data = {"item_id": item_id, "amount": amount}
         publish_event("events_stock", "RemoveStock", data)
@@ -354,6 +342,27 @@ def remove_stock(item_id: str, amount: int):
     except TimeoutError:
         return abort(400, REQ_ERROR_STR)
         ###await for ack in queue to return response to user (200 or 400)
+    except redis.exceptions.RedisError:
+        return abort(400, DB_ERROR_STR)
+
+@app.get('/stock/find/<item_id>')
+def find_item(item_id: str):
+    try:
+        data = {"item_id": item_id}
+        publish_event("events_stock", "FindItem", data)
+        start_subscriber('events_orchestrator', process_event, item_id)
+        ack_data = retrieve_ack(item_id)
+        if ack_data.get('type') == 'FindItem' and ack_data['data'].get('status') == 'succeed':
+            logger.info(f"Item: {item_id} found")
+            return jsonify(
+                {
+                    "stock": ack_data['data']['stock'],
+                    "price": ack_data['data']['price']
+                }
+            )
+        else:
+            logger.error(f"Item: {item_id} not found")
+            abort(400, DB_ERROR_STR)
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
 
