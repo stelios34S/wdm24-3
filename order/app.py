@@ -153,7 +153,6 @@ def add_item(data): #### ENDPOINT TRANSFERRED TO ORCHESTRATOR
     price = data['price']
     status = data['status']
     order_entry: OrderValue = get_order_from_db(order_id)
-    order_entry.total_cost
     #start_subscriber_oneoff('events_order', process_event, item_id)
     #item_reply = send_get_request(f"{GATEWAY_URL}/stock/find/{item_id}")
     if status == 'failed':

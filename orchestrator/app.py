@@ -47,7 +47,7 @@ def process_event(body):
 
 # -------------------------------------------------------------------------------------------------------------
 # ----------------------------------ORDER SERVICE-------------------------------------------------------------
-@app.post('/create/<user_id>')
+@app.post('/orders/create/<user_id>')
 def create_order(user_id: str):
     try:
         key = str(uuid.uuid4())
@@ -70,7 +70,7 @@ def create_order(user_id: str):
 
 
 
-@app.post('/checkout/<order_id>')
+@app.post('/orders/checkout/<order_id>')
 def checkout(order_id: str):
     try:
         logger.debug(f"Checking out {order_id}")
@@ -92,7 +92,7 @@ def checkout(order_id: str):
         return abort(400, REQ_ERROR_STR)
 
 
-@app.post('/addItem/<order_id>/<item_id>/<quantity>')
+@app.post('/orders/addItem/<order_id>/<item_id>/<quantity>')
 def add_item(order_id: str, item_id: str, quantity: int):
     try:
         data = {"order_id": order_id, "item_id": item_id, "quantity": quantity}
@@ -112,7 +112,7 @@ def add_item(order_id: str, item_id: str, quantity: int):
 
 # ------------------------------------------------------------------------------------------------------------------
 # ----------------------------------PAYMENT SERVICE-------------------------------------------------------------
-@app.post('/create_user')
+@app.post('/payment/create_user')
 def create_user():
     try:
         key = str(uuid.uuid4())
@@ -131,7 +131,7 @@ def create_user():
         return abort(400, DB_ERROR_STR)
 
 
-@app.post('/add_funds/<user_id>/<amount>')
+@app.post('/payment/add_funds/<user_id>/<amount>')
 def add_credit(user_id: str, amount: int):
     try:
         data = {"user_id": user_id, "amount": amount}
@@ -149,7 +149,7 @@ def add_credit(user_id: str, amount: int):
         return abort(400, DB_ERROR_STR)
 
 
-@app.post('/pay/<user_id>/<amount>')
+@app.post('/payment/pay/<user_id>/<amount>')
 def remove_credit(user_id: str, amount: int):
     logger.info(f"Removing {amount} credit from user: {user_id}")
     try:
@@ -171,7 +171,7 @@ def remove_credit(user_id: str, amount: int):
 # ------------------------------------------------------------------------------------------------------------------
 # ----------------------------------STOCK SERVICE-------------------------------------------------------------
 
-@app.post('/item/create/<price>')
+@app.post('/stock/item/create/<price>')
 def create_item(price: int):
     try:
         key = str(uuid.uuid4())
@@ -189,7 +189,7 @@ def create_item(price: int):
         return abort(400, DB_ERROR_STR)
 
 
-@app.post('/add/<item_id>/<amount>')  ####Transfered to orchestrator
+@app.post('/stock/add/<item_id>/<amount>')  ####Transfered to orchestrator
 def add_stock(item_id: str, amount: int):
     try:
         data = {"item_id": item_id, "amount": amount}
@@ -207,7 +207,7 @@ def add_stock(item_id: str, amount: int):
 
 
 
-@app.post('/subtract/<item_id>/<amount>')  ###transfer to orchestrator
+@app.post('/stock/subtract/<item_id>/<amount>')  ###transfer to orchestrator
 def remove_stock(item_id: str, amount: int):
     try:
         data = {"item_id": item_id, "amount": amount}
