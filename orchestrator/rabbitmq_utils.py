@@ -36,8 +36,17 @@ def publish_event(queue_name, event_type, data):
     return jsonify(event)
 
 
-def start_subscriber(queue_name, callback):
+def start_subscriber(queue_name, callback, correlation_id):
+    def callback_wrapper(ch, method, properties, body):
+        event = json.loads(body)
+        if event['data'].get('correlation_id') == correlation_id:
+            callback(event)
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+            ch.stop_consuming()  # Stop consuming after receiving the desired message
+
     channel.queue_declare(queue=queue_name)
-    channel.basic_consume(queue=queue_name, on_message_callback=callback, auto_ack=True)
+    channel.basic_consume(queue=queue_name, on_message_callback=callback_wrapper, auto_ack=False)
     pika.logging.info(f"Waiting for messages in {queue_name}. To exit press CTRL+C")
     channel.start_consuming()
+
+

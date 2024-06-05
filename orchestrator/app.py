@@ -13,7 +13,6 @@ import requests
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response, request
 from rabbitmq_utils import publish_event, start_subscriber
-
 DB_ERROR_STR = "DB error"
 REQ_ERROR_STR = "Requests error"
 
@@ -35,57 +34,15 @@ logging.getLogger("pika").setLevel(logging.WARNING)
 ############### AND SENDS IT BACK TO THE USER AS A RESPONSE
 
 
-ack_queues = {}
-def print_ack_queues():
-    logger.info("Current state of ack_queues:")
-    for correlation_id, queue in ack_queues.items():
-        logger.info(f"Queue for correlation ID {correlation_id}:")
-        items = []
-        try:
-            while True:
-                item = queue.get_nowait()
-                items.append(item)
-        except Empty:
-            pass
-        for item in items:
-            logger.info(f"{item}")
-            queue.put(item)  # Put items back into the queue after inspecting
-    logger.info("End of ack_queues state")
+
 
 # ----------------------------------ORCHESTRATOR-------------------------------------------------------------
-def get_ack_queue(correlation_id):
-    if correlation_id not in ack_queues:
-        ack_queues[correlation_id] = Queue()
-        logger.info(f"Created new queue for correlation ID: {correlation_id}")
-    return ack_queues[correlation_id]
 
+def process_event(body):
+    global ack_data
 
-@app.route('/acks', methods=['POST'])
-def ack_endpoint():
-    try:
-        ack_data = json.loads(request.json)
-        logger.info(f"Received ack: {ack_data}")
-        correlation_id = ack_data['correlation_id']
-        ack_queue = get_ack_queue(correlation_id)
-        ack_queue.put(ack_data)
-        #print_ack_queues()
-        return jsonify({'status': 'ACK received'}), 200
-    except Exception as e:
-        logger.error(f"Failed to process ack: {e}")
-        return jsonify({'status': 'Failed to process ack'}), 400
+    ack_data = body
 
-
-def await_ack(correlation_id, timeout=ACK_TIMEOUT):
-    ack_queue = get_ack_queue(correlation_id)
-    try:
-        logger.info(f"Waiting for ack with correlation ID: {correlation_id}")
-        #print_ack_queues()  # Print queue contents for debugging before waiting
-        ack_data = ack_queue.get(timeout=timeout)
-        logger.info(f"Received ack from queue for correlation ID {correlation_id}: {ack_data}")
-        return ack_data
-    except Empty:
-        logger.error("ACK timed out")
-        raise TimeoutError("ACK timed out")
 
 
 # -------------------------------------------------------------------------------------------------------------
@@ -99,9 +56,10 @@ def create_order(user_id: str):
         # logger.info(f"Order created: {key}, for user {user_id}")
         ###await for ack in queue to return response to user (200 or 400)
         ##create order success or failure
-        time.sleep(10)
-        ack = await_ack(key)
-        if ack.get("type")== "CreateOrder" and ack.get('status') == 'succeeded':
+        start_subscriber('events_orchestrator', process_event, key)
+        logger.info(f'message received with ACK{ack_data}')
+        ##ack = await_ack(key)
+        if ack_data.get("type")== "CreateOrder" and ack_data['data'].get('status') == 'succeed':
             return Response("Order Created", status=200)
         else:
             return abort(400, DB_ERROR_STR)
@@ -119,7 +77,7 @@ def checkout(order_id: str):
         data = {"order_id": order_id}
         publish_event("events_order", "Checkout", json.dumps(data))
         logger.info("Checkout initiated")
-        ack = await_ack(order_id)
+        ack = start_subscriber('events_orchestrator', process_event)
         if ack.get('type')== 'Checkout' and ack.get('status') == 'succeeded':
             return Response("Checkout succeeded", status=200)
         if ack.get('type') == 'IssueRefund' and ack.get('status') == 'succeeded':
@@ -139,7 +97,7 @@ def add_item(order_id: str, item_id: str, quantity: int):
     try:
         data = {"order_id": order_id, "item_id": item_id, "quantity": quantity}
         publish_event("events_order", "AddItem", json.dumps(data))
-        ack = await_ack(order_id)
+        ack = start_subscriber('events_orchestrator', process_event)
         if ack.get('type') == 'AddItem' and ack.get('status') == 'succeeded':
             return Response("Item added to order", status=200)
         else:
@@ -160,7 +118,7 @@ def create_user():
         key = str(uuid.uuid4())
         data = {"user_id": key}
         publish_event("events_payment", "CreateUser", json.dumps(data))
-        ack = await_ack(key)
+        ack = start_subscriber('events_orchestrator', process_event)
         if ack.get('type') == 'CreateUser' and ack.get('status') == 'succeeded':
             return Response(f"User: {key} created", status=200)
         else:
@@ -178,7 +136,7 @@ def add_credit(user_id: str, amount: int):
     try:
         data = {"user_id": user_id, "amount": amount}
         publish_event("events_payment", "AddCredit", json.dumps(data))
-        ack = await_ack(user_id)
+        ack = start_subscriber('events_orchestrator', process_event)
         if ack.get('type') == 'AddCredit' and ack.get('status') == 'succeeded':
             return Response(f"User: {user_id} credit is beging updated", status=200)
         else:
@@ -197,7 +155,7 @@ def remove_credit(user_id: str, amount: int):
     try:
         data = {"user_id": user_id, "amount": amount}
         publish_event("events_payment", "RemoveCredit", json.dumps(data))
-        ack = await_ack(user_id)
+        ack = start_subscriber('events_orchestrator', process_event)
         if ack.get('type') == 'RemoveCredit' and ack.get('status') == 'succeeded':
             return Response(f"User: {user_id} credit is  updated", status=200)
         else:
@@ -220,7 +178,7 @@ def create_item(price: int):
         data = {"price": price, "item_id": key}
         publish_event("events_stock", "CreateItem", json.dumps(data))
         ###await for ack in queue to return response to user (200 or 400)
-        ack = await_ack(key)
+        ack = start_subscriber('events_orchestrator', process_event)
         if ack.get('type') == 'CreateItem' and ack.get('status') == 'succeeded':
             return Response(f"Item: {key} is created", status=200)
         else:
@@ -237,7 +195,7 @@ def add_stock(item_id: str, amount: int):
         data = {"item_id": item_id, "amount": amount}
         publish_event("events_stock", "AddStock", json.dumps(data))
         ###await for ack in queue to return response to user (200 or 400)
-        ack = await_ack(item_id)
+        ack = start_subscriber('events_orchestrator', process_event)
         if ack.get('type') == 'AddStock' and ack.get('status') == 'succeeded':
             return Response(f"Item: {item_id} stock is updated", status=200)
         else:
@@ -254,7 +212,7 @@ def remove_stock(item_id: str, amount: int):
     try:
         data = {"item_id": item_id, "amount": amount}
         publish_event("events_stock", "RemoveStock", json.dumps(data))
-        ack = await_ack(item_id)
+        ack = start_subscriber('events_orchestrator', process_event)
         if ack.get('type') == 'RemoveStock' and ack.get('status') == 'succeeded':
             return Response(f"Item: {item_id} stock is updated", status=200)
         else:
@@ -267,6 +225,37 @@ def remove_stock(item_id: str, amount: int):
 
 
 # ------------------------------------------------------------------------------------------------------------------
+# def process_event(ch, method, properties, body):
+#     event = json.loads(body)
+#     event_type = event['type']
+#     data = event['data']
+#
+#     if event_type == 'CreateOrder':
+#         logger.info(f"Order created: {event}")
+#         return event
+    # if event_type == 'ItemAdded':
+    #     handle_add_item(data)
+    # if event_type == 'Checkout':
+    #     handle_checkout(data)
+    # if event_type == 'IssueRefund':
+    #     handle_issue_refund(data)
+    # if event_type == 'CreateUser':
+    #     handle_create_user(data)
+    # elif event_type == 'AddCredit':
+    #     handle_add_credit(data)
+    # elif event_type == 'RemoveCredit':
+    #     handle_remove_credit(data)
+    # elif event_type == 'CreateItem':
+    #     handle_create_item(data)
+    # elif event_type == 'AddStock':
+    #     handle_add_stock(data)
+    # elif event_type == 'RemoveStock':
+    #     handle_remove_stock(data)
+
+
+
+
+
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)
 else:

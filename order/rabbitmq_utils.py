@@ -67,8 +67,6 @@ def publish_event(queue_name, event_type, data):
         print(f"Published event to {queue_name}: {event}")
     except pika.exceptions.AMQPError:
         raise Exception("Failed to publish event")
-    finally:
-        connection.close()
 
 def start_subscriber(queue_name, callback):
     channel.queue_declare(queue=queue_name)

@@ -72,11 +72,12 @@ def create_item(data): ####Transfered to orchestrator
     value = msgpack.encode(StockValue(stock=0, price=int(price)))
     try:
         db.set(key, value)
+        publish_event('events_orchestrator', 'CreateItem', {'correlation_id': key, 'status': 'succeeded'})
+        return jsonify({'item_id': key})
     except redis.exceptions.RedisError:
-        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'CreateItem', 'status': 'failed','correlation_id': key}))
+        publish_event('events_orchestrator', 'CreateItem', {'correlation_id': key, 'status': 'failed'})
         abort(400, DB_ERROR_STR)
-    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'CreateItem', 'status': 'succeed','correlation_id': key}))
-    return jsonify({'item_id': key})
+
 
 
 @app.post('/batch_init/<n>/<starting_stock>/<item_price>')
@@ -110,11 +111,12 @@ def add_stock(data):
     item_entry.stock += int(amount)
     try:
         db.set(item_id, msgpack.encode(item_entry))
+        publish_event('events_orchestrator', 'AddStock', {'correlation_id': item_id, 'status': 'succeed'})
+        return jsonify({"msg": f"Item: {item_id} stock updated to: {item_entry.stock}"})
     except redis.exceptions.RedisError:
-        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'AddStock', 'status': 'failed','correlation_id': item_id}))
+        publish_event('events_orchestrator', 'AddStock', {'correlation_id': item_id, 'status': 'failed'})
         abort(400, DB_ERROR_STR)
-    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'AddStock', 'status': 'succeed','correlation_id': item_id}))
-    #return Response(f"Item: {item_id} stock updated to: {item_entry.stock}", status=200)
+
 
 
 #@app.post('/subtract/<item_id>/<amount>') ###transfer to orchestrator
@@ -126,14 +128,14 @@ def remove_stock(data):
     item_entry.stock -= int(amount)
     app.logger.debug(f"Item: {item_id} stock updated to: {item_entry.stock}")
     if item_entry.stock < 0:
-        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'RemoveStock', 'status': 'failed','correlation_id': item_id}))
+        publish_event('events_orchestrator', 'RemoveStock', {'correlation_id': item_id, 'status': 'failed'})
         abort(400, f"Item: {item_id} stock cannot get reduced below zero!")
     try:
         db.set(item_id, msgpack.encode(item_entry))
+        publish_event('events_orchestrator', 'RemoveStock', {'correlation_id': item_id, 'status': 'succeed'})
     except redis.exceptions.RedisError:
-        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'RemoveStock', 'status': 'failed','correlation_id': item_id}))
+        publish_event('events_orchestrator', 'RemoveStock', {'correlation_id': item_id, 'status': 'failed'})
         abort(400, DB_ERROR_STR)
-    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'RemoveStock', 'status': 'succeed','correlation_id': item_id}))
     #return Response(f"Item: {item_id} stock updated to: {item_entry.stock}", status=200)
 
 
