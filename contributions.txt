@@ -1,5 +1,5 @@
-Andreas Achilleos        (4877837) - Project template migration, transactional protocol implementation, library integrations, consistency debugging, initial report, ideas, architecture
-Stelios Avgousti         (4822978) - Project template migration, transactional protocol implementation, library integrations, consistency debugging, initial report, ideas, architecture
-Tushar Rajiv Kumar       () -
-Patricia Vanessa Santoso () -
-Yunhan Wei               () -
+Andreas Achilleos (4877837) - Project template migration, transactional protocol implementation, library integrations, consistency debugging, initial report, ideas, architecture
+Stelios Avgousti (4822978)  - Project template migration, transactional protocol implementation, library integrations, consistency debugging, initial report, ideas, architecture
+Tushar Rajiv Kumar ()       -
+Patricia Vanessa Santoso () - Database partitioning (Different branch [redis_clustering], NOT WORKING)
+Yunhan Wei ()               -
