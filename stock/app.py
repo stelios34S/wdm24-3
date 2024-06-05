@@ -4,6 +4,8 @@ import atexit
 import json
 from threading import Thread
 import uuid
+from threading import Thread
+from queue import Queue
 
 import requests
 
@@ -43,7 +45,6 @@ def teardown_db(exception):
     if exception:
         logger.error(f"Error in teardown_db: {exception}")
 
-
 def close_db_connection():
     with app.app_context():
         db =get_db()
@@ -60,16 +61,13 @@ class StockValue(Struct):
 
 
 def get_item_from_db(item_id: str) -> StockValue | None:
-    # get serialized data
     try:
         db = get_db()
         entry: bytes = db.get(item_id)
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
-    # deserialize data if it exists else return null
     entry: StockValue | None = msgpack.decode(entry, type=StockValue) if entry else None
     if entry is None:
-        # if item does not exist in the database; abort
         abort(400, f"Item: {item_id} not found!")
     return entry
 
@@ -128,7 +126,6 @@ def add_stock(data):
     amount = data["amount"]
     logger.info(f"Adding {amount} for {item_id}")
     item_entry: StockValue = get_item_from_db(item_id)
-    # update stock, serialize and update database
     item_entry.stock += int(amount)
     try:
         db = get_db()
@@ -146,7 +143,6 @@ def remove_stock(data):
     item_id = data["item_id"]
     amount = data["amount"]
     item_entry: StockValue = get_item_from_db(item_id)
-    # update stock, serialize and update database
     item_entry.stock -= int(amount)
     logger.debug(f"Item: {item_id} stock updated to: {item_entry.stock}")
     if item_entry.stock < 0:

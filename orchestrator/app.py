@@ -92,8 +92,6 @@ def create_order(user_id: str):
             return jsonify({'order_id': key})
         else:
             return abort(400, DB_ERROR_STR)
-    except TimeoutError:
-        return abort(400, REQ_ERROR_STR)
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
 

@@ -13,7 +13,7 @@ from flask import Flask, jsonify, abort, Response,g
 from rabbitmq_utils import publish_event, start_subscriber
 
 DB_ERROR_STR = "DB error"
-
+REQ_ERROR_STR = "Requests error"
 
 app = Flask("payment-service")
 logging.basicConfig(level=logging.DEBUG)
@@ -39,7 +39,6 @@ def teardown_db(exception):
         db.close()
     if exception:
         logger.error(f"Error in teardown_db: {exception}")
-
 
 def close_db_connection():
     with app.app_context():
@@ -68,6 +67,7 @@ def get_user_from_db(user_id: str) -> UserValue | None:
     return entry
 
 
+
 #@app.post('/create_user') ####transfer to orchestrator
 def create_user(data):
     key = data['user_id']
@@ -87,8 +87,7 @@ def batch_init_users(data):
     n = data["n"]
     starting_money = data["starting_money"]
     starting_money = int(starting_money)
-    kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(UserValue(credit=starting_money))
-                                  for i in range(n)}
+    kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(UserValue(credit=starting_money)) for i in range(n)}
     try:
         db = get_db()
         # db.mset(kv_pairs)
@@ -111,6 +110,7 @@ def find_user(data):
         abort(400, DB_ERROR_STR)
 
 
+
 #@app.post('/add_funds/<user_id>/<amount>') #####transfer to orchestrator
 def add_credit(data):
     user_id = data["user_id"]
@@ -125,6 +125,7 @@ def add_credit(data):
     except redis.exceptions.RedisError:
         publish_event('events_orchestrator', 'AddCredit', {'correlation_id': user_id, 'status': 'failed'})
         abort(400, DB_ERROR_STR)
+
 
 
 #@app.post('/pay/<user_id>/<amount>') #####transfer to orchestrator
@@ -222,7 +223,6 @@ def process_event(ch, method, properties, body):
             find_user(data)
 
 start_subscriber('events_payment', process_event)
-
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)

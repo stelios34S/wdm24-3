@@ -4,6 +4,8 @@ import atexit
 import random
 import json
 import uuid
+
+
 import redis
 from redis.cluster import ClusterNode, RedisCluster
 import requests
@@ -42,7 +44,6 @@ def teardown_db(exception):
     if exception:
         logger.error(f"Error in teardown_db: {exception}")
 
-
 def close_db_connection():
     with app.app_context():
         db =get_db()
@@ -67,10 +68,8 @@ def get_order_from_db(order_id: str) -> OrderValue | None: ###Does not need to g
         entry: bytes = db.get(order_id)
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
-    # deserialize data if it exists else return null
     entry: OrderValue | None = msgpack.decode(entry, type=OrderValue) if entry else None
     if entry is None:
-        # if order does not exist in the database; abort
         abort(400, f"Order: {order_id} not found!")
     return entry
 
@@ -293,6 +292,7 @@ def process_event(ch, method, properties, body):
             batch_init_users(data)
         elif event_type == 'FindOrder':
             find_order(data)
+
 
 
 
