@@ -9,7 +9,7 @@ from redis.cluster import ClusterNode, RedisCluster
 import requests
 
 from msgspec import msgpack, Struct
-from flask import Flask, jsonify, abort, Response
+from flask import Flask, jsonify, abort, Response,g
 from rabbitmq_utils import publish_event, start_subscriber
 
 DB_ERROR_STR = "DB error"
@@ -21,21 +21,30 @@ logger = logging.getLogger(__name__)
 GATEWAY_URL = os.environ["GATEWAY_URL"]
 logging.getLogger("pika").setLevel(logging.WARNING)
 
-# db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
-#                               port=int(os.environ['REDIS_PORT']),
-#                               password=os.environ['REDIS_PASSWORD'],
-#                               db=int(os.environ['REDIS_DB']))
-
 host = os.environ['REDIS_NODES'].split()
 nodes = [ClusterNode(host=h, port=os.environ['REDIS_CLUSTER_ANNOUNCE_PORT']) for h in host]
-db = RedisCluster(startup_nodes=nodes)
+def get_db():
+    if 'db' not in g:
+        # g.db = redis.Redis(host=os.environ['REDIS_HOST'],
+        #                    port=int(os.environ['REDIS_PORT']),
+        #                    password=os.environ['REDIS_PASSWORD'],
+        #                    db=int(os.environ['REDIS_DB']))
+        g.db = RedisCluster(startup_nodes=nodes)
+    return g.db
+
+@app.teardown_appcontext
+def teardown_db(exception):
+    db = g.pop('db', None)
+    if db is not None:
+        db.close()
+    if exception:
+        logger.error(f"Error in teardown_db: {exception}")
 
 
 def close_db_connection():
-    db.close()
-
-# event_queue = Queue()
-
+    with app.app_context():
+        db =get_db()
+        db.close()
 
 atexit.register(close_db_connection)
 
@@ -47,6 +56,7 @@ class UserValue(Struct):
 def get_user_from_db(user_id: str) -> UserValue | None:
     try:
         # get serialized data
+        db = get_db()
         entry: bytes = db.get(user_id)
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
@@ -64,6 +74,7 @@ def create_user(data):
     value = msgpack.encode(UserValue(credit=0))
 
     try:
+        db = get_db()
         db.set(key, value)
         publish_event('events_orchestrator', 'CreateUser', {'correlation_id': key, 'status': 'succeed'})
     except redis.exceptions.RedisError:
@@ -79,6 +90,7 @@ def batch_init_users(data):
     kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(UserValue(credit=starting_money))
                                   for i in range(n)}
     try:
+        db = get_db()
         # db.mset(kv_pairs)
         for k,v in kv_pairs.items():
             db.set(k, v)
@@ -107,6 +119,7 @@ def add_credit(data):
     # update credit, serialize and update database
     user_entry.credit += int(amount)
     try:
+        db = get_db()
         db.set(user_id, msgpack.encode(user_entry))
         publish_event('events_orchestrator', 'AddCredit', {'correlation_id': user_id, 'status': 'succeed'})
     except redis.exceptions.RedisError:
@@ -126,6 +139,7 @@ def remove_credit(data):
         publish_event('events_orchestrator', 'RemoveCredit', {'correlation_id': user_id, 'status': 'failed'})
         abort(400, f"User: {user_id} credit cannot get reduced below zero!")
     try:
+        db = get_db()
         db.set(user_id, msgpack.encode(user_entry))
         publish_event('events_orchestrator', 'RemoveCredit', {'correlation_id': user_id, 'status': 'succeed'})
     except redis.exceptions.RedisError:
@@ -134,7 +148,6 @@ def remove_credit(data):
 
 
 def handle_process_payment(data):
-    logger.info("Process payment")
     user_id = data['user_id']
     order_id = data['order_id']
     total_cost = data['total_cost']
@@ -143,29 +156,31 @@ def handle_process_payment(data):
     if user_entry.credit >= total_cost:
         user_entry.credit -= total_cost
         try:
+            db = get_db()
             db.set(user_id, msgpack.encode(user_entry))
+
+            publish_event('events_order', 'PaymentSuccessfulOrder', {
+                'order_id': order_id,
+                'user_id': user_id,
+                'total_cost': total_cost,
+                'items': items
+            })
+            publish_event('events_stock', 'PaymentSuccessfulStock', {
+                'order_id': order_id,
+                'user_id': user_id,
+                'total_cost': total_cost,
+                'items': items
+            })
+            logger.info(f"Payment successful for order: {order_id}")
         except redis.exceptions.RedisError:
             publish_event('events_order', 'PaymentFailed', {'order_id': order_id})
             abort(400, DB_ERROR_STR)
-        publish_event('events_order', 'PaymentSuccessfulOrder', {
-            'order_id': order_id,
-            'user_id': user_id,
-            'total_cost': total_cost,
-            'items': items
-        })
-        publish_event('events_stock', 'PaymentSuccessfulStock', {
-            'order_id': order_id,
-            'user_id': user_id,
-            'total_cost': total_cost,
-            'items': items
-        })
-        logger.info(f"Payment successful for order: {order_id}")
     else:
         publish_event('events_order', 'PaymentFailed', {
             'order_id': order_id,
         })
         logger.info(f"Payment failed for order: {order_id}")
-        abort(400, "Insufficient credit")
+        #abort(400, "Insufficient credit")
 
 def handle_issue_refund(data): #####maybe change order id to userid
     user_id = data['user_id']
@@ -174,6 +189,7 @@ def handle_issue_refund(data): #####maybe change order id to userid
     user_entry: UserValue = get_user_from_db(user_id)
     user_entry.credit += total_cost
     try:
+        db = get_db()
         db.set(user_id, msgpack.encode(user_entry))
         publish_event('events_order', 'RefundIssued', {
             'order_id': order_id,
@@ -185,24 +201,25 @@ def handle_issue_refund(data): #####maybe change order id to userid
 
 
 def process_event(ch, method, properties, body):
-    event = json.loads(body)
-    event_type = event['type']
-    app.logger.info(event_type)
-    data = event['data']
-    if event_type == "ProcessPayment":
-        handle_process_payment(data)
-    elif event_type == "IssueRefund":
-        handle_issue_refund(data)
-    elif event_type == "CreateUser":
-        create_user(data)
-    elif event_type == "AddCredit":
-        add_credit(data)
-    elif event_type == "RemoveCredit":
-        remove_credit(data)
-    elif event_type == "BatchInit":
-        batch_init_users(data)
-    elif event_type == "FindUser":
-        find_user(data)
+    with app.app_context():
+        event = json.loads(body)
+        event_type = event['type']
+        app.logger.info(event_type)
+        data = event['data']
+        if event_type == "ProcessPayment":
+            handle_process_payment(data)
+        elif event_type == "IssueRefund":
+            handle_issue_refund(data)
+        elif event_type == "CreateUser":
+            create_user(data)
+        elif event_type == "AddCredit":
+            add_credit(data)
+        elif event_type == "RemoveCredit":
+            remove_credit(data)
+        elif event_type == "BatchInit":
+            batch_init_users(data)
+        elif event_type == "FindUser":
+            find_user(data)
 
 start_subscriber('events_payment', process_event)
 

@@ -13,7 +13,7 @@ import redis
 from redis.cluster import ClusterNode, RedisCluster
 
 from msgspec import msgpack, Struct
-from flask import Flask, jsonify, abort, Response
+from flask import Flask, jsonify, abort, Response,g
 from rabbitmq_utils import publish_event, start_subscriber
 
 DB_ERROR_STR = "DB error"
@@ -24,19 +24,30 @@ logger = logging.getLogger(__name__)
 GATEWAY_URL = os.environ["GATEWAY_URL"]
 logging.getLogger("pika").setLevel(logging.WARNING)
 
-# db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
-#                               port=int(os.environ['REDIS_PORT']),
-#                               password=os.environ['REDIS_PASSWORD'],
-#                               db=int(os.environ['REDIS_DB']))
-
 host = os.environ['REDIS_NODES'].split()
 nodes = [ClusterNode(host=h, port=os.environ['REDIS_CLUSTER_ANNOUNCE_PORT']) for h in host]
-db = RedisCluster(startup_nodes=nodes)
+def get_db():
+    if 'db' not in g:
+        # g.db = redis.Redis(host=os.environ['REDIS_HOST'],
+        #                    port=int(os.environ['REDIS_PORT']),
+        #                    password=os.environ['REDIS_PASSWORD'],
+        #                    db=int(os.environ['REDIS_DB']))
+        g.db = RedisCluster(startup_nodes=nodes)
+    return g.db
+
+@app.teardown_appcontext
+def teardown_db(exception):
+    db = g.pop('db', None)
+    if db is not None:
+        db.close()
+    if exception:
+        logger.error(f"Error in teardown_db: {exception}")
 
 
 def close_db_connection():
-    db.close()
-
+    with app.app_context():
+        db =get_db()
+        db.close()
 
 atexit.register(close_db_connection)
 
@@ -51,6 +62,7 @@ class StockValue(Struct):
 def get_item_from_db(item_id: str) -> StockValue | None:
     # get serialized data
     try:
+        db = get_db()
         entry: bytes = db.get(item_id)
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
@@ -69,6 +81,7 @@ def create_item(data): ####Transfered to orchestrator
     logger.debug(f"Item: {key} created")
     value = msgpack.encode(StockValue(stock=0, price=int(price)))
     try:
+        db = get_db()
         db.set(key, value)
         publish_event('events_orchestrator', 'CreateItem', {'correlation_id': key, 'status': 'succeed'})
         #return jsonify({'item_id': key})
@@ -86,6 +99,7 @@ def batch_init_users(data):
     kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(StockValue(stock=starting_stock, price=item_price))
                                   for i in range(n)}
     try:
+        db = get_db()
         # db.mset(kv_pairs)
         for k,v in kv_pairs.items():
             db.set(k, v)
@@ -117,6 +131,7 @@ def add_stock(data):
     # update stock, serialize and update database
     item_entry.stock += int(amount)
     try:
+        db = get_db()
         db.set(item_id, msgpack.encode(item_entry))
         publish_event('events_orchestrator', 'AddStock', {'correlation_id': item_id, 'status': 'succeed'})
         #return jsonify({"msg": f"Item: {item_id} stock updated to: {item_entry.stock}"})
@@ -138,6 +153,7 @@ def remove_stock(data):
         publish_event('events_orchestrator', 'RemoveStock', {'correlation_id': item_id, 'status': 'failed'})
         abort(400, f"Item: {item_id} stock cannot get reduced below zero!")
     try:
+        db = get_db()
         db.set(item_id, msgpack.encode(item_entry))
         publish_event('events_orchestrator', 'RemoveStock', {'correlation_id': item_id, 'status': 'succeed'})
     except redis.exceptions.RedisError:
@@ -160,6 +176,7 @@ def handle_payment_successful(data):
             item_entry: StockValue = get_item_from_db(item_id)
             item_entry.stock -= quantity
             try:
+                db = get_db()
                 db.set(item_id, msgpack.encode(item_entry))
             except redis.exceptions.RedisError:
                 abort(400, DB_ERROR_STR)
@@ -173,24 +190,35 @@ def handle_payment_successful(data):
             'order_id': order_id,
         })
 
-
+def handle_find_item(data):
+    item_id = data['item_id']
+    try:
+        item_entry: StockValue = get_item_from_db(item_id)
+        publish_event("events_orchestrator", "FindItem",
+                      {"item_id": item_id, "stock": item_entry.stock, "price": item_entry.price, "status": "succeed", "correlation_id": item_id})
+    except redis.exceptions.RedisError:
+        publish_event("events_orchestrator", "FindItem",{"item_id": item_id, "status": "failed", "correlation_id": item_id})
+        abort(400, DB_ERROR_STR)
 
 def process_event(ch, method, properties, body):
-    event = json.loads(body)
-    event_type = event['type']
-    data = event['data']
-    if event_type == 'PaymentSuccessfulStock':
-        handle_payment_successful(data)
-    if event_type == 'CreateItem':
-        create_item(data)
-    if event_type == 'AddStock':
-        add_stock(data)
-    if event_type == 'RemoveStock':
-        remove_stock(data)
-    if event_type == 'AddItemCheck':
-        find_item(data)
-    if event_type == 'BatchInit':
-        batch_init_users(data)
+    with app.app_context():
+        event = json.loads(body)
+        event_type = event['type']
+        data = event['data']
+        if event_type == 'PaymentSuccessfulStock':
+            handle_payment_successful(data)
+        if event_type == 'CreateItem':
+            create_item(data)
+        if event_type == 'AddStock':
+            add_stock(data)
+        if event_type == 'RemoveStock':
+            remove_stock(data)
+        if event_type == 'AddItemCheck':
+            find_item(data)
+        if event_type == 'BatchInit':
+            batch_init_users(data)
+        if event_type == 'FindItem':
+            handle_find_item(data)
 
 start_subscriber('events_stock', process_event)
 
