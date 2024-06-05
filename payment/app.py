@@ -91,7 +91,9 @@ def batch_init_users(data):
     kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(UserValue(credit=starting_money)) for i in range(n)}
     try:
         db = get_db()
-        db.mset(kv_pairs)
+        # db.mset(kv_pairs)
+        for k,v in kv_pairs.items():
+            db.set(k, v)
         publish_event('events_orchestrator', 'BatchInit', {'correlation_id': "BatchInitPayment"+key, 'status': 'succeed'})
     except redis.exceptions.RedisError:
         publish_event('events_orchestrator', 'BatchInit', {'correlation_id': "BatchInitPayment"+key, 'status': 'failed'})
