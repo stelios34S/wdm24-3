@@ -50,13 +50,6 @@ class OrderValue(Struct):
     total_cost: int
 
 
-def send_post_request_orch(url, data):
-    try:
-        response = requests.post(url, json=data)
-        response.raise_for_status()
-        logger.info(f"Sent POST request to {url} with data {data}")
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Failed to send POST request to {url}: {e}")
 
 
 def get_order_from_db(order_id: str) -> OrderValue | None: ###Does not need to get transferred
@@ -82,22 +75,21 @@ def create_order(data): #### ENDPOINT TRANSFERRED TO ORCHESTRATOR
     try:
         db.set(key, value)
         logger.info(f"Order created: {key}, for user {user_id}")
-
+        publish_event('events_orchestrator', 'CreateOrder', {'correlation_id': key, 'status': 'succeed'})
     except redis.exceptions.RedisError:
         publish_event('events_orchestrator', 'CreateOrder', {'correlation_id': key, 'status': 'failed'})
         abort(400, DB_ERROR_STR)
-    publish_event('events_orchestrator', 'CreateOrder', {'correlation_id': key, 'status': 'succeed'})
 
 
-@app.post('/batch_init/<n>/<n_items>/<n_users>/<item_price>') ###Does not need to get transferred
-def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
-    n = int(n)
-    n_items = int(n_items)
-    n_users = int(n_users)
-    item_price = int(item_price)
+
+#@app.post('/batch_init/<n>/<n_items>/<n_users>/<item_price>') ###Does not need to get transferred
+def batch_init_users(data):
+    n = data["n"]
+    n_items = data['n_items']
+    n_users = data['n_users']
+    item_price = data['item_price']
 
     # logger.info(f"Batch init  n: {n}, n_items: {n_items}, n_users: {n_users}, item_price: {item_price}")
-
     def generate_entry() -> OrderValue:
         user_id = random.randint(0, n_users - 1)
         item1_id = random.randint(0, n_items - 1)
@@ -115,23 +107,26 @@ def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
         for k,v in kv_pairs.items():
             db.set(k, v)
         logger.info("Batch init for orders successful")
+        publish_event('events_orchestrator', 'BatchInit', {'status': 'succeed',"correlation_id": "BatchInitOrders"})
     except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-    return jsonify({"msg": "Batch init for orders successful"})
+        publish_event('events_orchestrator', 'BatchInit', {'status': 'failed', "correlation_id": "BatchInitOrders"})
+        abort(400, DB_ERROR_STR)
 
 
-@app.get('/find/<order_id>') ###Does not need to get transferred
-def find_order(order_id: str):
-    order_entry: OrderValue = get_order_from_db(order_id)
-    return jsonify(
-        {
-            "order_id": order_id,
-            "paid": order_entry.paid,
-            "items": order_entry.items,
-            "user_id": order_entry.user_id,
-            "total_cost": order_entry.total_cost
-        }
-    )
+#@app.get('/find/<order_id>') ###Does not need to get transferred
+def find_order(data):
+    order_id = data['order_id']
+    try:
+        order_entry: OrderValue = get_order_from_db(order_id)
+        paid = order_entry.paid
+        items = order_entry.items
+        user_id = order_entry.user_id
+        total_cost = order_entry.total_cost
+        publish_event('events_orchestrator', 'FindOrder', {'correlation_id': order_id, 'status': 'succeed', 'paid': paid, 'items': items, 'user_id': user_id, 'total_cost': total_cost})
+    except redis.exceptions.RedisError:
+        publish_event('events_orchestrator', 'FindOrder', {'correlation_id': order_id, 'status': 'failed'})
+        abort(400, DB_ERROR_STR)
+
 
 
 def send_post_request(url: str):
@@ -157,10 +152,12 @@ def add_item(data): #### ENDPOINT TRANSFERRED TO ORCHESTRATOR
     order_id = data['order_id']
     item_id = data['item_id']
     quantity = data['quantity']
-    price = data['price']
+    if data['price']:
+        price = data['price']
+    else:
+        price = 0
     status = data['status']
     order_entry: OrderValue = get_order_from_db(order_id)
-    order_entry.total_cost
     #start_subscriber_oneoff('events_order', process_event, item_id)
     #item_reply = send_get_request(f"{GATEWAY_URL}/stock/find/{item_id}")
     if status == 'failed':
@@ -277,6 +274,10 @@ def process_event(ch, method, properties, body):
         handle_stock_failed(data)
     elif event_type == 'AddItemCheck':
         handle_add_item_check(data)
+    elif event_type == 'BatchInit':
+        batch_init_users(data)
+    elif event_type == 'FindOrder':
+        find_order(data)
 
 
 

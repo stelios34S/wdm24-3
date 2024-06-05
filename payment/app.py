@@ -44,13 +44,6 @@ class UserValue(Struct):
 
 
 
-def send_post_request_orch(url, data):
-    try:
-        response = requests.post(url, json=data)
-        response.raise_for_status()
-        logger.info(f"Sent POST request to {url} with data {data}")
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Failed to send POST request to {url}: {e}")
 def get_user_from_db(user_id: str) -> UserValue | None:
     try:
         # get serialized data
@@ -78,9 +71,10 @@ def create_user(data):
         abort(400, DB_ERROR_STR)
 
 
-@app.post('/batch_init/<n>/<starting_money>')
-def batch_init_users(n: int, starting_money: int):
-    n = int(n)
+#@app.post('/batch_init/<n>/<starting_money>')
+def batch_init_users(data):
+    n = data["n"]
+    starting_money = data["starting_money"]
     starting_money = int(starting_money)
     kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(UserValue(credit=starting_money))
                                   for i in range(n)}
@@ -88,20 +82,21 @@ def batch_init_users(n: int, starting_money: int):
         # db.mset(kv_pairs)
         for k,v in kv_pairs.items():
             db.set(k, v)
+        publish_event('events_orchestrator', 'BatchInit', {'correlation_id': "BatchInitPayment", 'status': 'succeed'})
     except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-    return jsonify({"msg": "Batch init for users successful"})
+        publish_event('events_orchestrator', 'BatchInit', {'correlation_id': "BatchInitPayment", 'status': 'failed'})
+        abort(400, DB_ERROR_STR)
 
 
-@app.get('/find_user/<user_id>')
-def find_user(user_id: str):
-    user_entry: UserValue = get_user_from_db(user_id)
-    return jsonify(
-        {
-            "user_id": user_id,
-            "credit": user_entry.credit
-        }
-    )
+#@app.get('/find_user/<user_id>')
+def find_user(data):
+    user_id = data['user_id']
+    try:
+        user_entry: UserValue = get_user_from_db(user_id)
+        publish_event('events_orchestrator', 'FindUser', {'correlation_id': user_id, 'status': 'succeed', 'credit': user_entry.credit})
+    except redis.exceptions.RedisError:
+        publish_event('events_orchestrator', 'FindUser', {'correlation_id': user_id, 'status': 'failed'})
+        abort(400, DB_ERROR_STR)
 
 
 #@app.post('/add_funds/<user_id>/<amount>') #####transfer to orchestrator
@@ -204,6 +199,10 @@ def process_event(ch, method, properties, body):
         add_credit(data)
     elif event_type == "RemoveCredit":
         remove_credit(data)
+    elif event_type == "BatchInit":
+        batch_init_users(data)
+    elif event_type == "FindUser":
+        find_user(data)
 
 start_subscriber('events_payment', process_event)
 
