@@ -109,6 +109,44 @@ def add_item(order_id: str, item_id: str, quantity: int):
     except redis.exceptions.RedisError:
         return abort(400, REQ_ERROR_STR)
 
+@app.post('/orders/batch_init/<n>/<n_items>/<n_users>/<item_price>')
+def batch_init_users_orders(n: int, n_items: int, n_users: int, item_price: int):
+
+    # logger.info(f"Batch init  n: {n}, n_items: {n_items}, n_users: {n_users}, item_price: {item_price}")
+    try:
+        data = {"n": int(n), "n_items": int(n_items), "n_users": int(n_users), "item_price": int(item_price)}
+        publish_event("events_order", "BatchInit", data)
+        start_subscriber('events_orchestrator', process_event, "BatchInitOrders")
+        if ack_data.get('type') == 'BatchInit' and ack_data['data'].get('status') == 'succeed':
+            logger.info("Batch init for orders successful")
+            return Response("Batch init successful", status=200)
+        else:
+            return abort(400, DB_ERROR_STR)
+    except redis.exceptions.RedisError:
+        return abort(400, DB_ERROR_STR)
+
+@app.get('/orders/find/<order_id>') ###Does not need to get transferred
+def find_order(order_id: str):
+
+    try:
+        data = {"order_id": order_id}
+        publish_event("events_order", "FindOrder", data)
+        start_subscriber('events_orchestrator', process_event, order_id)
+        if ack_data.get('type') == 'FindOrder' and ack_data['data'].get('status') == 'succeed':
+            return jsonify(
+                {
+                    "order_id": order_id,
+                    "paid": ack_data['data']['paid'],
+                    "items": ack_data['data']['items'],
+                    "user_id": ack_data['data']['user_id'],
+                    "total_cost": ack_data['data']['total_cost']
+                }
+            )
+        else:
+            return abort(400, DB_ERROR_STR)
+    except redis.exceptions.RedisError:
+        return abort(400, DB_ERROR_STR)
+
 
 # ------------------------------------------------------------------------------------------------------------------
 # ----------------------------------PAYMENT SERVICE-------------------------------------------------------------
@@ -167,7 +205,37 @@ def remove_credit(user_id: str, amount: int):
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
 
+@app.post('/payment/batch_init/<n>/<starting_money>')
+def batch_init_users_payment(n: int, starting_money: int):
+    try:
+        data = {"n": int(n), "starting_money": int(starting_money)}
+        publish_event("events_payment", "BatchInit", data)
+        start_subscriber('events_orchestrator', process_event, "BatchInitPayment")
+        if ack_data.get('type') == 'BatchInit' and ack_data['data'].get('status') == 'succeed':
+            logger.info("Batch init for payment successful")
+            return Response("Batch init successful", status=200)
+        else:
+            return abort(400, DB_ERROR_STR)
+    except redis.exceptions.RedisError:
+        return abort(400, DB_ERROR_STR)
 
+@app.get('/payment/find_user/<user_id>')
+def find_user(user_id: str):
+    try:
+        data = {"user_id": user_id}
+        publish_event("events_payment", "FindUser", data)
+        start_subscriber('events_orchestrator', process_event, user_id)
+        if ack_data.get('type') == 'FindUser' and ack_data['data'].get('status') == 'succeed':
+            return jsonify(
+                {
+                    "user_id": user_id,
+                    "credit": ack_data['data']['credit']
+                }
+            )
+        else:
+            return abort(400, DB_ERROR_STR)
+    except redis.exceptions.RedisError:
+        return abort(400, DB_ERROR_STR)
 # ------------------------------------------------------------------------------------------------------------------
 # ----------------------------------STOCK SERVICE-------------------------------------------------------------
 
@@ -179,7 +247,9 @@ def create_item(price: int):
         publish_event("events_stock", "CreateItem", data)
         ###await for ack in queue to return response to user (200 or 400)
         start_subscriber('events_orchestrator', process_event, key)
+
         if ack_data.get('type') == 'CreateItem' and ack_data['data'].get('status') == 'succeed':
+            logger.info(f"Item: {key} created")
             return Response(f"Item: {key} is created", status=200)
         else:
             return abort(400, DB_ERROR_STR)
@@ -223,34 +293,21 @@ def remove_stock(item_id: str, amount: int):
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
 
+@app.post('/stock/batch_init/<n>/<starting_stock>/<item_price>')
+def batch_init_users_stock(n: int, starting_stock: int, item_price: int):
 
+    try:
+        data = {"n": int(n), "starting_stock": int(starting_stock), "item_price": int(item_price)}
+        publish_event("events_stock", "BatchInit", data)
+        start_subscriber('events_orchestrator', process_event, "BatchInitStock")
+        if ack_data.get('type') == 'BatchInit' and ack_data['data'].get('status') == 'succeed':
+            logger.info("Batch init for stock successful")
+            return Response("Batch init successful", status=200)
+        else:
+            return abort(400, DB_ERROR_STR)
+    except redis.exceptions.RedisError:
+        return abort(400, DB_ERROR_STR)
 # ------------------------------------------------------------------------------------------------------------------
-# def process_event(ch, method, properties, body):
-#     event = json.loads(body)
-#     event_type = event['type']
-#     data = event['data']
-#
-#     if event_type == 'CreateOrder':
-#         logger.info(f"Order created: {event}")
-#         return event
-    # if event_type == 'ItemAdded':
-    #     handle_add_item(data)
-    # if event_type == 'Checkout':
-    #     handle_checkout(data)
-    # if event_type == 'IssueRefund':
-    #     handle_issue_refund(data)
-    # if event_type == 'CreateUser':
-    #     handle_create_user(data)
-    # elif event_type == 'AddCredit':
-    #     handle_add_credit(data)
-    # elif event_type == 'RemoveCredit':
-    #     handle_remove_credit(data)
-    # elif event_type == 'CreateItem':
-    #     handle_create_item(data)
-    # elif event_type == 'AddStock':
-    #     handle_add_stock(data)
-    # elif event_type == 'RemoveStock':
-    #     handle_remove_stock(data)
 
 
 

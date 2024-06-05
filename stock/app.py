@@ -36,13 +36,6 @@ def close_db_connection():
 atexit.register(close_db_connection)
 
 
-def send_post_request_orch(url, data):
-    try:
-        response = requests.post(url, json=data)
-        response.raise_for_status()
-        logger.info(f"Sent POST request to {url} with data {data}")
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Failed to send POST request to {url}: {e}")
 
 
 class StockValue(Struct):
@@ -73,22 +66,26 @@ def create_item(data): ####Transfered to orchestrator
     try:
         db.set(key, value)
         publish_event('events_orchestrator', 'CreateItem', {'correlation_id': key, 'status': 'succeed'})
-        return jsonify({'item_id': key})
+        #return jsonify({'item_id': key})
     except redis.exceptions.RedisError:
         publish_event('events_orchestrator', 'CreateItem', {'correlation_id': key, 'status': 'failed'})
         abort(400, DB_ERROR_STR)
 
 
 
-@app.post('/batch_init/<n>/<starting_stock>/<item_price>')
-def batch_init_users(n: int, starting_stock: int, item_price: int):
+#@app.post('/batch_init/<n>/<starting_stock>/<item_price>')
+def batch_init_users(data):
+    n = data["n"]
+    starting_stock = data['starting_stock']
+    item_price = data['item_price']
     kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(StockValue(stock=starting_stock, price=item_price))
                                   for i in range(n)}
     try:
         db.mset(kv_pairs)
+        publish_event('events_orchestrator', 'BatchInit', {'correlation_id': "BatchInitStock", 'status': 'succeed'})
     except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-    return jsonify({"msg": "Batch init for stock successful"})
+        publish_event('events_orchestrator', 'BatchInit', {'correlation_id': "BatchInitStock", 'status': 'failed'})
+        abort(400, DB_ERROR_STR)
 
 
 #@app.get('/find/<item_id>')
@@ -115,7 +112,7 @@ def add_stock(data):
     try:
         db.set(item_id, msgpack.encode(item_entry))
         publish_event('events_orchestrator', 'AddStock', {'correlation_id': item_id, 'status': 'succeed'})
-        return jsonify({"msg": f"Item: {item_id} stock updated to: {item_entry.stock}"})
+        #return jsonify({"msg": f"Item: {item_id} stock updated to: {item_entry.stock}"})
     except redis.exceptions.RedisError:
         publish_event('events_orchestrator', 'AddStock', {'correlation_id': item_id, 'status': 'failed'})
         abort(400, DB_ERROR_STR)
@@ -158,7 +155,7 @@ def handle_payment_successful(data):
             try:
                 db.set(item_id, msgpack.encode(item_entry))
             except redis.exceptions.RedisError:
-                return abort(400, DB_ERROR_STR)
+                abort(400, DB_ERROR_STR)
         publish_event('events_order', 'StockReserved', {
             'order_id': order_id,
         })
@@ -185,6 +182,8 @@ def process_event(ch, method, properties, body):
         remove_stock(data)
     if event_type == 'AddItemCheck':
         find_item(data)
+    if event_type == 'BatchInit':
+        batch_init_users(data)
 
 start_subscriber('events_stock', process_event)
 
