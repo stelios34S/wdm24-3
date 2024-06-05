@@ -18,7 +18,7 @@ DB_ERROR_STR = "DB error"
 app = Flask("payment-service")
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
-GATEWAY_URL = "http://orchestrator:8001"
+GATEWAY_URL = os.environ["GATEWAY_URL"]
 logging.getLogger("pika").setLevel(logging.WARNING)
 
 # db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
@@ -72,12 +72,10 @@ def create_user(data):
 
     try:
         db.set(key, value)
+        publish_event('events_orchestrator', 'CreateUser', {'correlation_id': key, 'status': 'succeed'})
     except redis.exceptions.RedisError:
-        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'CreateUser', 'status': 'failed','correlation_id': key}))
+        publish_event('events_orchestrator', 'CreateUser', {'correlation_id': key, 'status': 'failed'})
         abort(400, DB_ERROR_STR)
-        #return abort(400, DB_ERROR_STR)
-    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'CreateUser', 'status': 'succeed','correlation_id': key}))
-    #return jsonify({'user_id': key})
 
 
 @app.post('/batch_init/<n>/<starting_money>')
@@ -115,11 +113,10 @@ def add_credit(data):
     user_entry.credit += int(amount)
     try:
         db.set(user_id, msgpack.encode(user_entry))
+        publish_event('events_orchestrator', 'AddCredit', {'correlation_id': user_id, 'status': 'succeed'})
     except redis.exceptions.RedisError:
-        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'AddCredit', 'status': 'failed','correlation_id': user_id}))
+        publish_event('events_orchestrator', 'AddCredit', {'correlation_id': user_id, 'status': 'failed'})
         abort(400, DB_ERROR_STR)
-    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'AddCredit', 'status': 'succeed','correlation_id': user_id}))
-    #return Response(f"User: {user_id} credit updated to: {user_entry.credit}", status=200)
 
 
 #@app.post('/pay/<user_id>/<amount>') #####transfer to orchestrator
@@ -131,15 +128,15 @@ def remove_credit(data):
     # update credit, serialize and update database
     user_entry.credit -= int(amount)
     if user_entry.credit < 0:
-        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'RemoveCredit', 'status': 'failed','correlation_id': user_id}))
+        publish_event('events_orchestrator', 'RemoveCredit', {'correlation_id': user_id, 'status': 'failed'})
         abort(400, f"User: {user_id} credit cannot get reduced below zero!")
     try:
         db.set(user_id, msgpack.encode(user_entry))
+        publish_event('events_orchestrator', 'RemoveCredit', {'correlation_id': user_id, 'status': 'succeed'})
     except redis.exceptions.RedisError:
-        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'RemoveCredit', 'status': 'failed','correlation_id': user_id}))
+        publish_event('events_orchestrator', 'RemoveCredit', {'correlation_id': user_id, 'status': 'failed'})
         abort(400, DB_ERROR_STR)
-    send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'RemoveCredit', 'status': 'succeed','correlation_id': user_id}))
-    #return Response(f"User: {user_id} credit updated to: {user_entry.credit}", status=200)
+
 
 def handle_process_payment(data):
     logger.info("Process payment")
@@ -153,6 +150,7 @@ def handle_process_payment(data):
         try:
             db.set(user_id, msgpack.encode(user_entry))
         except redis.exceptions.RedisError:
+            publish_event('events_order', 'PaymentFailed', {'order_id': order_id})
             abort(400, DB_ERROR_STR)
         publish_event('events_order', 'PaymentSuccessfulOrder', {
             'order_id': order_id,
@@ -166,7 +164,6 @@ def handle_process_payment(data):
             'total_cost': total_cost,
             'items': items
         })
-        #send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'Checkout', 'status': 'payment_successful'}))
         logger.info(f"Payment successful for order: {order_id}")
     else:
         publish_event('events_order', 'PaymentFailed', {
@@ -175,7 +172,7 @@ def handle_process_payment(data):
         logger.info(f"Payment failed for order: {order_id}")
         abort(400, "Insufficient credit")
 
-def handle_issue_refund(data):
+def handle_issue_refund(data): #####maybe change order id to userid
     user_id = data['user_id']
     order_id = data['order_id']
     total_cost = data['total_cost']
@@ -183,14 +180,13 @@ def handle_issue_refund(data):
     user_entry.credit += total_cost
     try:
         db.set(user_id, msgpack.encode(user_entry))
+        publish_event('events_order', 'RefundIssued', {
+            'order_id': order_id,
+        })
+        logger.info(f"Refund issued for order: {order_id}")
     except redis.exceptions.RedisError:
-        send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'IssueRefund', 'status': 'failed','correlation_id': order_id}))
+        publish_event('events_orchestrator', 'IssueRefund', {'correlation_id': order_id, 'status': 'failed'})
         abort(400, DB_ERROR_STR)
-    publish_event('events_order', 'RefundIssued', {
-        'order_id': order_id,
-    })
-    #send_post_request_orch(f"{GATEWAY_URL}/acks", json.dumps({'type': 'IssueRefund', 'status': 'succeed'}))
-    logger.info(f"Refund issued for order: {order_id}")
 
 
 def process_event(ch, method, properties, body):
@@ -208,8 +204,6 @@ def process_event(ch, method, properties, body):
         add_credit(data)
     elif event_type == "RemoveCredit":
         remove_credit(data)
-
-
 
 start_subscriber('events_payment', process_event)
 
