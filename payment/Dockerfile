@@ -6,6 +6,9 @@ COPY ./requirements.txt .
 
 RUN pip install -r requirements.txt
 
+# Copy the rabbitmq_utils.py file
+COPY ./rabbitmq_utils.py .
+
 COPY . .
 
 EXPOSE 5000

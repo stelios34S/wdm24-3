@@ -16,3 +16,4 @@ class Event:
     def from_json(json_str):
         event_dict = json.loads(json_str)
         return Event(event_dict["event_type"], event_dict["data"])
+

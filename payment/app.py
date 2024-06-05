@@ -1,47 +1,58 @@
 import logging
 import os
 import atexit
-import uuid
-import requests
 from threading import Thread
-from queue import Queue
-
-
+import json
+import uuid
 import redis
+import requests
 
 from msgspec import msgpack, Struct
-from flask import Flask, jsonify, abort, Response
-from event import Event
+from flask import Flask, jsonify, abort, Response,g
+from rabbitmq_utils import publish_event, start_subscriber
 
 DB_ERROR_STR = "DB error"
 REQ_ERROR_STR = "Requests error"
 
 app = Flask("payment-service")
-
-# Set up the logger
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+GATEWAY_URL = os.environ["GATEWAY_URL"]
+logging.getLogger("pika").setLevel(logging.WARNING)
 
-db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
-                              port=int(os.environ['REDIS_PORT']),
-                              password=os.environ['REDIS_PASSWORD'],
-                              db=int(os.environ['REDIS_DB']))
 
-event_queue = Queue()
+def get_db():
+    if 'db' not in g:
+        g.db = redis.Redis(host=os.environ['REDIS_HOST'],
+                           port=int(os.environ['REDIS_PORT']),
+                           password=os.environ['REDIS_PASSWORD'],
+                           db=int(os.environ['REDIS_DB']))
+    return g.db
+
+@app.teardown_appcontext
+def teardown_db(exception):
+    db = g.pop('db', None)
+    if db is not None:
+        db.close()
+    if exception:
+        logger.error(f"Error in teardown_db: {exception}")
+
 def close_db_connection():
-    db.close()
-
+    with app.app_context():
+        db =get_db()
+        db.close()
 
 atexit.register(close_db_connection)
-
 
 class UserValue(Struct):
     credit: int
 
 
+
 def get_user_from_db(user_id: str) -> UserValue | None:
     try:
         # get serialized data
+        db = get_db()
         entry: bytes = db.get(user_id)
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
@@ -54,175 +65,159 @@ def get_user_from_db(user_id: str) -> UserValue | None:
 
 
 
-
-
-def handle_event(event):
-    data = event.data
-    event_type = event.event_type
-    if event_type == "OrderCreated":
-        handle_order_created(data)
-    elif event_type == "IssueRefund":
-        handle_issue_refund(data)
-
-
-def handle_order_created(data):
-    order_id = data["order_id"]
-    user_id = data["user_id"]
-    amount = data["total_cost"]
-    logger.info(f"Processing OrderCreated event for order_id: {order_id}")
-    user_entry = get_user_from_db(user_id)
-    if user_entry and user_entry.credit >= amount:
-        user_entry.credit -= amount
-        try:
-            db.set(user_id, msgpack.encode(user_entry))
-            publish_event("PaymentSuccessful", {"order_id": order_id, "user_id": user_id, "total_cost": amount})
-        except redis.exceptions.RedisError:
-            publish_event("PaymentFailed", {"order_id": order_id})
-    else:
-        publish_event("PaymentFailed", {"order_id": order_id})
-
-def handle_issue_refund(data):
-    order_id = data["order_id"]
-    user_id = data["user_id"]
-    amount = data["amount"]
-    logger.info(f"Issuing refund for order_id: {order_id}")
-    user_entry = get_user_from_db(user_id)
-    if user_entry:
-        user_entry.credit += amount
-        try:
-            db.set(user_id, msgpack.encode(user_entry))
-            publish_event("RefundIssued", {"order_id": order_id})
-        except redis.exceptions.RedisError:
-            logger.error(f"Failed to issue refund for order {order_id}")
-
-def publish_event(event_type, data):
-    event = Event(event_type, data)
-    logger.info("Publishing event")
-    db.publish('payment_events', event.to_json())
-
-
-def send_post_request(url: str):
-    try:
-        response = requests.post(url)
-    except requests.exceptions.RequestException:
-        abort(400, REQ_ERROR_STR)
-    else:
-        return response
-
-
-@app.post('/create_user')
-def create_user():
-    key = str(uuid.uuid4())
+#@app.post('/create_user') ####transfer to orchestrator
+def create_user(data):
+    key = data['user_id']
     value = msgpack.encode(UserValue(credit=0))
+
     try:
+        db = get_db()
         db.set(key, value)
+        publish_event('events_orchestrator', 'CreateUser', {'correlation_id': key, 'status': 'succeed'})
     except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-    return jsonify({'user_id': key})
+        publish_event('events_orchestrator', 'CreateUser', {'correlation_id': key, 'status': 'failed'})
+        abort(400, DB_ERROR_STR)
 
 
-@app.post('/batch_init/<n>/<starting_money>')
-def batch_init_users(n: int, starting_money: int):
-    n = int(n)
+#@app.post('/batch_init/<n>/<starting_money>')
+def batch_init_users(data):
+    n = data["n"]
+    starting_money = data["starting_money"]
     starting_money = int(starting_money)
     kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(UserValue(credit=starting_money)) for i in range(n)}
     try:
+        db = get_db()
         db.mset(kv_pairs)
+        publish_event('events_orchestrator', 'BatchInit', {'correlation_id': "BatchInitPayment", 'status': 'succeed'})
     except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-    return jsonify({"msg": "Batch init for users successful"})
+        publish_event('events_orchestrator', 'BatchInit', {'correlation_id': "BatchInitPayment", 'status': 'failed'})
+        abort(400, DB_ERROR_STR)
 
 
-@app.get('/find_user/<user_id>')
-def find_user(user_id: str):
-    user_entry: UserValue = get_user_from_db(user_id)
-    return jsonify({"user_id": user_id, "credit": user_entry.credit})
+#@app.get('/find_user/<user_id>')
+def find_user(data):
+    user_id = data['user_id']
+    try:
+        user_entry: UserValue = get_user_from_db(user_id)
+        publish_event('events_orchestrator', 'FindUser', {'correlation_id': user_id, 'status': 'succeed', 'credit': user_entry.credit})
+    except redis.exceptions.RedisError:
+        publish_event('events_orchestrator', 'FindUser', {'correlation_id': user_id, 'status': 'failed'})
+        abort(400, DB_ERROR_STR)
 
 
-@app.post('/add_funds/<user_id>/<amount>')
-def add_credit(user_id: str, amount: int):
+
+#@app.post('/add_funds/<user_id>/<amount>') #####transfer to orchestrator
+def add_credit(data):
+    user_id = data["user_id"]
+    amount = data["amount"]
     user_entry: UserValue = get_user_from_db(user_id)
     # update credit, serialize and update database
     user_entry.credit += int(amount)
     try:
+        db = get_db()
         db.set(user_id, msgpack.encode(user_entry))
+        publish_event('events_orchestrator', 'AddCredit', {'correlation_id': user_id, 'status': 'succeed'})
     except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-    return Response(f"User: {user_id} credit updated to: {user_entry.credit}", status=200)
+        publish_event('events_orchestrator', 'AddCredit', {'correlation_id': user_id, 'status': 'failed'})
+        abort(400, DB_ERROR_STR)
 
 
-# def rollback_payment(user_id: str, amount: int):
-#     user_entry: UserValue = get_user_from_db(user_id)
-#     user_entry.credit += amount
-#     try:
-#         db.set(user_id, msgpack.encode(user_entry))
-#     except redis.exceptions.RedisError:
-#         app.logger.error(f"Failed to rollback payment for user: {user_id}")
 
-
-@app.post('/pay/<user_id>/<amount>')
-def remove_credit(user_id: str, amount: int):
-    app.logger.debug(f"Removing {amount} credit from user: {user_id}")
+#@app.post('/pay/<user_id>/<amount>') #####transfer to orchestrator
+def remove_credit(data):
+    user_id= data["user_id"]
+    amount = data["amount"]
+    logger.info(f"Removing {amount} credit from user: {user_id}")
     user_entry: UserValue = get_user_from_db(user_id)
     # update credit, serialize and update database
     user_entry.credit -= int(amount)
     if user_entry.credit < 0:
+        publish_event('events_orchestrator', 'RemoveCredit', {'correlation_id': user_id, 'status': 'failed'})
         abort(400, f"User: {user_id} credit cannot get reduced below zero!")
     try:
+        db = get_db()
         db.set(user_id, msgpack.encode(user_entry))
+        publish_event('events_orchestrator', 'RemoveCredit', {'correlation_id': user_id, 'status': 'succeed'})
     except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-    return Response(f"User: {user_id} credit updated to: {user_entry.credit}", status=200)
+        publish_event('events_orchestrator', 'RemoveCredit', {'correlation_id': user_id, 'status': 'failed'})
+        abort(400, DB_ERROR_STR)
 
 
+def handle_process_payment(data):
+    user_id = data['user_id']
+    order_id = data['order_id']
+    total_cost = data['total_cost']
+    items = data['items']
+    user_entry: UserValue = get_user_from_db(user_id)
+    if user_entry.credit >= total_cost:
+        user_entry.credit -= total_cost
+        try:
+            db = get_db()
+            db.set(user_id, msgpack.encode(user_entry))
 
-@app.post('/cancel/<user_id>/<order_id>')
-def cancel_payment(user_id: str, order_id: str):
+            publish_event('events_order', 'PaymentSuccessfulOrder', {
+                'order_id': order_id,
+                'user_id': user_id,
+                'total_cost': total_cost,
+                'items': items
+            })
+            publish_event('events_stock', 'PaymentSuccessfulStock', {
+                'order_id': order_id,
+                'user_id': user_id,
+                'total_cost': total_cost,
+                'items': items
+            })
+            logger.info(f"Payment successful for order: {order_id}")
+        except redis.exceptions.RedisError:
+            publish_event('events_order', 'PaymentFailed', {'order_id': order_id})
+            abort(400, DB_ERROR_STR)
+    else:
+        publish_event('events_order', 'PaymentFailed', {
+            'order_id': order_id,
+        })
+        logger.info(f"Payment failed for order: {order_id}")
+        #abort(400, "Insufficient credit")
+
+def handle_issue_refund(data): #####maybe change order id to userid
+    user_id = data['user_id']
+    order_id = data['order_id']
+    total_cost = data['total_cost']
+    user_entry: UserValue = get_user_from_db(user_id)
+    user_entry.credit += total_cost
     try:
-        db.delete(f"{user_id}:{order_id}")
+        db = get_db()
+        db.set(user_id, msgpack.encode(user_entry))
+        publish_event('events_order', 'RefundIssued', {
+            'order_id': order_id,
+        })
+        logger.info(f"Refund issued for order: {order_id}")
     except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-    return jsonify({"done": True})
+        publish_event('events_orchestrator', 'IssueRefund', {'correlation_id': order_id, 'status': 'failed'})
+        abort(400, DB_ERROR_STR)
 
 
-@app.get('/status/<user_id>/<order_id>')
-def payment_status(user_id: str, order_id: str):
-    try:
-        paid = db.get(f"{user_id}:{order_id}")
-        if paid is None:
-            return jsonify({"paid": False})
-    except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
-    return jsonify({"paid": True})
+def process_event(ch, method, properties, body):
+    with app.app_context():
+        event = json.loads(body)
+        event_type = event['type']
+        app.logger.info(event_type)
+        data = event['data']
+        if event_type == "ProcessPayment":
+            handle_process_payment(data)
+        elif event_type == "IssueRefund":
+            handle_issue_refund(data)
+        elif event_type == "CreateUser":
+            create_user(data)
+        elif event_type == "AddCredit":
+            add_credit(data)
+        elif event_type == "RemoveCredit":
+            remove_credit(data)
+        elif event_type == "BatchInit":
+            batch_init_users(data)
+        elif event_type == "FindUser":
+            find_user(data)
 
-
-
-def process_event_queue():
-    while True:
-        event = event_queue.get()
-        handle_event(event)
-        event_queue.task_done()
-
-def subscribe_to_events():
-    pubsub = db.pubsub()
-    pubsub.subscribe('order_events')
-    logger.info("Subscribed to order-events channel.")
-    for message in pubsub.listen():
-        logger.info(f"Received message: {message}")
-        if message['type'] == 'message':
-            event = Event.from_json(message['data'])
-            event_queue.put(event)
-# Start a few worker threads
-for i in range(5):
-    worker = Thread(target=process_event_queue)
-    worker.daemon = True
-    worker.start()
-
-subscriber_thread = Thread(target=subscribe_to_events)
-subscriber_thread.start()
-
-
-
+start_subscriber('events_payment', process_event)
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)
