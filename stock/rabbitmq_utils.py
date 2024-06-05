@@ -35,3 +35,4 @@ def start_subscriber(queue_name, callback):
     channel.basic_consume(queue=queue_name, on_message_callback=callback, auto_ack=True)
     pika.logging.info(f"Waiting for messages in {queue_name}. To exit press CTRL+C")
     channel.start_consuming()
+

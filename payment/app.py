@@ -17,7 +17,7 @@ DB_ERROR_STR = "DB error"
 app = Flask("payment-service")
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
-GATEWAY_URL = "http://orchestrator:8001"
+GATEWAY_URL = os.environ["GATEWAY_URL"]
 logging.getLogger("pika").setLevel(logging.WARNING)
 
 db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
@@ -143,6 +143,7 @@ def handle_process_payment(data):
         try:
             db.set(user_id, msgpack.encode(user_entry))
         except redis.exceptions.RedisError:
+            publish_event('events_order', 'PaymentFailed', {'order_id': order_id})
             abort(400, DB_ERROR_STR)
         publish_event('events_order', 'PaymentSuccessfulOrder', {
             'order_id': order_id,
@@ -181,13 +182,11 @@ def handle_issue_refund(data): #####maybe change order id to userid
         abort(400, DB_ERROR_STR)
 
 
-
-
 def process_event(ch, method, properties, body):
     event = json.loads(body)
     event_type = event['type']
     app.logger.info(event_type)
-    data = json.loads(event['data'])
+    data = event['data']
     if event_type == "ProcessPayment":
         handle_process_payment(data)
     elif event_type == "IssueRefund":
@@ -198,8 +197,6 @@ def process_event(ch, method, properties, body):
         add_credit(data)
     elif event_type == "RemoveCredit":
         remove_credit(data)
-
-
 
 start_subscriber('events_payment', process_event)
 

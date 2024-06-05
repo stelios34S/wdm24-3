@@ -3,21 +3,18 @@ import os
 import atexit
 import random
 import json
-from threading import Thread
 import uuid
-from queue import Queue
-
 import redis
 import requests
 
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
 
-from rabbitmq_utils import publish_event, rpc_call, start_subscriber
+from rabbitmq_utils import publish_event, start_subscriber
 
 DB_ERROR_STR = "DB error"
 REQ_ERROR_STR = "Requests error"
-GATEWAY_URL = "http://orchestrator:8001"
+GATEWAY_URL = os.environ["GATEWAY_URL"]
 
 app = Flask("order-service")
 logging.basicConfig(level=logging.DEBUG)
@@ -30,6 +27,9 @@ db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
                               password=os.environ['REDIS_PASSWORD'],
                               db=int(os.environ['REDIS_DB']))
 
+def process_event_from_stock(body):
+    global ack_data
+    ack_data = body
 
 def close_db_connection():
     db.close()
@@ -150,15 +150,18 @@ def add_item(data): #### ENDPOINT TRANSFERRED TO ORCHESTRATOR
     order_id = data['order_id']
     item_id = data['item_id']
     quantity = data['quantity']
+    price = data['price']
+    status = data['status']
     order_entry: OrderValue = get_order_from_db(order_id)
-    item_reply =  send_get_request(f"{GATEWAY_URL}/stock/find/{item_id}")
-    if item_reply.status_code != 200:
+    order_entry.total_cost
+    #start_subscriber_oneoff('events_order', process_event, item_id)
+    #item_reply = send_get_request(f"{GATEWAY_URL}/stock/find/{item_id}")
+    if status == 'failed':
         # Request failed because item does not I
         publish_event('events_orchestrator', 'ItemAdded', {'correlation_id': order_id, 'status': 'failed'})
         abort(400, f"Item: {item_id} does not exist!")
-    item_json: dict = item_reply.json()
     order_entry.items.append((item_id, int(quantity)))
-    order_entry.total_cost += int(quantity) * item_json["price"]
+    order_entry.total_cost += int(quantity) * price
     try:
         db.set(order_id, msgpack.encode(order_entry))
         logger.info(f"Item: {item_id} added to: {order_id} price updated to: {order_entry.total_cost}")
@@ -167,6 +170,12 @@ def add_item(data): #### ENDPOINT TRANSFERRED TO ORCHESTRATOR
         publish_event('events_orchestrator', 'ItemAdded', {'correlation_id': order_id, 'status': 'failed'})
         abort(400, REQ_ERROR_STR)
 
+def handle_add_item_check(data):
+    order_id = data['order_id']
+    item_id = data['item_id']
+    quantity = data['quantity']
+    order_entry: OrderValue = get_order_from_db(order_id)
+    publish_event('events_stock', 'AddItemCheck', {"item_id": item_id, "order_id": order_id, "quantity": quantity})
 
 
 #####STILL UNSURE ABOUT THIS METHOF
@@ -243,7 +252,7 @@ def handle_stock_failed(data):
 def process_event(ch, method, properties, body):
     event = json.loads(body)
     event_type = event['type']
-    data = json.loads(event['data'])
+    data = event['data']
     if event_type == 'OrderCreation':
         create_order(data)
     if event_type == 'AddItem':
@@ -260,6 +269,9 @@ def process_event(ch, method, properties, body):
         handle_stock_reserved(data)
     elif event_type == 'StockFailed':
         handle_stock_failed(data)
+    elif event_type == 'AddItemCheck':
+        handle_add_item_check(data)
+
 
 
 

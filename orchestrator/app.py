@@ -52,7 +52,7 @@ def create_order(user_id: str):
     try:
         key = str(uuid.uuid4())
         data = {"order_id": key, "user_id": user_id}
-        publish_event("events_order", "OrderCreation", json.dumps(data))
+        publish_event("events_order", "OrderCreation", data)
         # logger.info(f"Order created: {key}, for user {user_id}")
         ###await for ack in queue to return response to user (200 or 400)
         ##create order success or failure
@@ -75,10 +75,10 @@ def checkout(order_id: str):
     try:
         logger.debug(f"Checking out {order_id}")
         data = {"order_id": order_id}
-        publish_event("events_order", "Checkout", json.dumps(data))
+        publish_event("events_order", "Checkout", data)
         logger.info("Checkout initiated")
         start_subscriber('events_orchestrator', process_event, order_id)
-        if ack_data.get('type')== 'Checkout' and ack_data['data'].get('status') == 'succeed':
+        if ack_data.get('type') == 'Checkout' and ack_data['data'].get('status') == 'succeed':
             return Response("Checkout succeed", status=200)
         if ack_data.get('type') == 'IssueRefund' and ack_data['data'].get('status') == 'succeed':
             return Response("Refund issued", status=200)
@@ -96,9 +96,9 @@ def checkout(order_id: str):
 def add_item(order_id: str, item_id: str, quantity: int):
     try:
         data = {"order_id": order_id, "item_id": item_id, "quantity": quantity}
-        publish_event("events_order", "AddItem", json.dumps(data))
+        publish_event("events_order", "AddItemCheck", data)
         start_subscriber('events_orchestrator', process_event, order_id)
-        if ack_data.get('type') == 'AddItem' and ack_data['data'].get('status') == 'succeed':
+        if ack_data.get('type') == 'ItemAdded' and ack_data['data'].get('status') == 'succeed':
             return Response("Item added to order", status=200)
         else:
             return abort(400, DB_ERROR_STR)
@@ -117,7 +117,7 @@ def create_user():
     try:
         key = str(uuid.uuid4())
         data = {"user_id": key}
-        publish_event("events_payment", "CreateUser", json.dumps(data))
+        publish_event("events_payment", "CreateUser", data)
         start_subscriber('events_orchestrator', process_event, key)
         if ack_data.get('type') == 'CreateUser' and ack_data["data"].get('status') == 'succeed':
             return Response(f"User: {key} created", status=200)
@@ -135,7 +135,7 @@ def create_user():
 def add_credit(user_id: str, amount: int):
     try:
         data = {"user_id": user_id, "amount": amount}
-        publish_event("events_payment", "AddCredit", json.dumps(data))
+        publish_event("events_payment", "AddCredit", data)
         start_subscriber('events_orchestrator', process_event, user_id)
         if ack_data.get('type') == 'AddCredit' and ack_data['data'].get('status') == 'succeed':
             return Response(f"User: {user_id} credit is beging updated", status=200)
@@ -154,7 +154,7 @@ def remove_credit(user_id: str, amount: int):
     logger.info(f"Removing {amount} credit from user: {user_id}")
     try:
         data = {"user_id": user_id, "amount": amount}
-        publish_event("events_payment", "RemoveCredit", json.dumps(data))
+        publish_event("events_payment", "RemoveCredit", data)
         start_subscriber('events_orchestrator', process_event, user_id)
         if ack_data.get('type') == 'RemoveCredit' and ack_data['data'].get('status') == 'succeed':
             return Response(f"User: {user_id} credit is  updated", status=200)
@@ -176,7 +176,7 @@ def create_item(price: int):
     try:
         key = str(uuid.uuid4())
         data = {"price": price, "item_id": key}
-        publish_event("events_stock", "CreateItem", json.dumps(data))
+        publish_event("events_stock", "CreateItem", data)
         ###await for ack in queue to return response to user (200 or 400)
         start_subscriber('events_orchestrator', process_event, key)
         if ack_data.get('type') == 'CreateItem' and ack_data['data'].get('status') == 'succeed':
@@ -193,7 +193,7 @@ def create_item(price: int):
 def add_stock(item_id: str, amount: int):
     try:
         data = {"item_id": item_id, "amount": amount}
-        publish_event("events_stock", "AddStock", json.dumps(data))
+        publish_event("events_stock", "AddStock", data)
         ###await for ack in queue to return response to user (200 or 400)
         start_subscriber('events_orchestrator', process_event, item_id)
         if ack_data.get('type') == 'AddStock' and ack_data['data'].get('status') == 'succeed':
@@ -211,7 +211,7 @@ def add_stock(item_id: str, amount: int):
 def remove_stock(item_id: str, amount: int):
     try:
         data = {"item_id": item_id, "amount": amount}
-        publish_event("events_stock", "RemoveStock", json.dumps(data))
+        publish_event("events_stock", "RemoveStock", data)
         start_subscriber('events_orchestrator', process_event, item_id)
         if ack_data.get('type') == 'RemoveStock' and ack_data['data'].get('status') == 'succeed':
             return Response(f"Item: {item_id} stock is updated", status=200)

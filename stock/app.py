@@ -20,7 +20,7 @@ DB_ERROR_STR = "DB error"
 app = Flask("stock-service")
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
-GATEWAY_URL = "http://orchestrator:8001"
+GATEWAY_URL = os.environ["GATEWAY_URL"]
 logging.getLogger("pika").setLevel(logging.WARNING)
 
 db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
@@ -68,11 +68,11 @@ def get_item_from_db(item_id: str) -> StockValue | None:
 def create_item(data): ####Transfered to orchestrator
     price = data["price"]
     key = data["item_id"]
-    app.logger.debug(f"Item: {key} created")
+    logger.debug(f"Item: {key} created")
     value = msgpack.encode(StockValue(stock=0, price=int(price)))
     try:
         db.set(key, value)
-        publish_event('events_orchestrator', 'CreateItem', {'correlation_id': key, 'status': 'succeeded'})
+        publish_event('events_orchestrator', 'CreateItem', {'correlation_id': key, 'status': 'succeed'})
         return jsonify({'item_id': key})
     except redis.exceptions.RedisError:
         publish_event('events_orchestrator', 'CreateItem', {'correlation_id': key, 'status': 'failed'})
@@ -91,21 +91,25 @@ def batch_init_users(n: int, starting_stock: int, item_price: int):
     return jsonify({"msg": "Batch init for stock successful"})
 
 
-@app.get('/find/<item_id>')
-def find_item(item_id: str):
-    item_entry: StockValue = get_item_from_db(item_id)
-    return jsonify(
-        {
-            "stock": item_entry.stock,
-            "price": item_entry.price
-        }
-    )
+#@app.get('/find/<item_id>')
+def find_item(data):
+    order_id = data['order_id']
+    item_id = data['item_id']
+    quantity = data['quantity']
+    logger.info("I WAS HIT")
+    try:
+        item_entry: StockValue = get_item_from_db(item_id)
+        publish_event("events_order", "AddItem", {"item_id": item_id, "order_id": order_id, "quantity": quantity, "price": item_entry.price,"status": "succeed"})
+    except redis.exceptions.RedisError:
+        publish_event("events_order", "AddItem", {"item_id": item_id, "order_id": order_id, "quantity": quantity, "price": item_entry.price ,"status": "failed"})
+        abort(400, DB_ERROR_STR)
 
 
 #@app.post('/add/<item_id>/<amount>') ####Transfered to orchestrator
 def add_stock(data):
     item_id = data["item_id"]
     amount = data["amount"]
+    logger.info(f"Adding {amount} for {item_id}")
     item_entry: StockValue = get_item_from_db(item_id)
     # update stock, serialize and update database
     item_entry.stock += int(amount)
@@ -126,7 +130,7 @@ def remove_stock(data):
     item_entry: StockValue = get_item_from_db(item_id)
     # update stock, serialize and update database
     item_entry.stock -= int(amount)
-    app.logger.debug(f"Item: {item_id} stock updated to: {item_entry.stock}")
+    logger.debug(f"Item: {item_id} stock updated to: {item_entry.stock}")
     if item_entry.stock < 0:
         publish_event('events_orchestrator', 'RemoveStock', {'correlation_id': item_id, 'status': 'failed'})
         abort(400, f"Item: {item_id} stock cannot get reduced below zero!")
@@ -137,9 +141,6 @@ def remove_stock(data):
         publish_event('events_orchestrator', 'RemoveStock', {'correlation_id': item_id, 'status': 'failed'})
         abort(400, DB_ERROR_STR)
     #return Response(f"Item: {item_id} stock updated to: {item_entry.stock}", status=200)
-
-
-
 
 
 def handle_payment_successful(data):
@@ -174,7 +175,7 @@ def handle_payment_successful(data):
 def process_event(ch, method, properties, body):
     event = json.loads(body)
     event_type = event['type']
-    data = json.loads(event['data'])
+    data = event['data']
     if event_type == 'PaymentSuccessfulStock':
         handle_payment_successful(data)
     if event_type == 'CreateItem':
@@ -183,8 +184,10 @@ def process_event(ch, method, properties, body):
         add_stock(data)
     if event_type == 'RemoveStock':
         remove_stock(data)
+    if event_type == 'AddItemCheck':
+        find_item(data)
 
-start_subscriber('events', process_event)
+start_subscriber('events_stock', process_event)
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)
