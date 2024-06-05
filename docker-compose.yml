@@ -23,23 +23,35 @@ services:
   orchestrator:
     build: ./orchestrator
     image : orchestrator:latest
-    command : gunicorn -b 0.0.0.0:8001 -w 2 --timeout 60 --log-level=info app:app
+    command : gunicorn -b 0.0.0.0:8001 -w 10 --timeout 30 --log-level=info app:app
     env_file:
       - env/orchestrator_redis.env
     depends_on:
       - rabbitmq
+      - orchestrator-db
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
-
+  orchestrator-db:
+    image: redis:7.2-bookworm
+    command: redis-server --requirepass redis --maxmemory 512mb
 
   order-service:
     build: ./order
     image: order:latest
-    command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 60 --log-level=info app:app
+    command: gunicorn -b 0.0.0.0:5000 -w 10 --timeout 30 --log-level=info app:app
     env_file:
       - env/order_redis.env
     depends_on:
       - rabbitmq
       - order-db
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
 
   order-db:
     image: redis:7.2-bookworm
@@ -48,12 +60,16 @@ services:
   stock-service:
     build: ./stock
     image: stock:latest
-    command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 60 --log-level=info app:app
+    command: gunicorn -b 0.0.0.0:5000 -w 10 --timeout 30 --log-level=info app:app
     env_file:
       - env/stock_redis.env
     depends_on:
       - rabbitmq
       - stock-db
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
   stock-db:
     image: redis:7.2-bookworm
@@ -62,12 +78,16 @@ services:
   payment-service:
     build: ./payment
     image: payment:latest
-    command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 60 --log-level=info app:app
+    command: gunicorn -b 0.0.0.0:5000 -w 10 --timeout 30 --log-level=info app:app
     env_file:
       - env/payment_redis.env
     depends_on:
       - rabbitmq
       - payment-db
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
   payment-db:
     image: redis:7.2-bookworm

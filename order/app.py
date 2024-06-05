@@ -8,7 +8,7 @@ import redis
 import requests
 
 from msgspec import msgpack, Struct
-from flask import Flask, jsonify, abort, Response
+from flask import Flask, jsonify, abort, Response, g
 
 from rabbitmq_utils import publish_event, start_subscriber
 
@@ -22,18 +22,26 @@ logger = logging.getLogger(__name__)
 
 logging.getLogger("pika").setLevel(logging.WARNING)
 logger.info(f'{GATEWAY_URL} gateway url')
-db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
-                              port=int(os.environ['REDIS_PORT']),
-                              password=os.environ['REDIS_PASSWORD'],
-                              db=int(os.environ['REDIS_DB']))
+def get_db():
+    if 'db' not in g:
+        g.db = redis.Redis(host=os.environ['REDIS_HOST'],
+                           port=int(os.environ['REDIS_PORT']),
+                           password=os.environ['REDIS_PASSWORD'],
+                           db=int(os.environ['REDIS_DB']))
+    return g.db
+@app.teardown_appcontext
+def teardown_db(exception):
+    db = g.pop('db', None)
+    if db is not None:
+        db.close()
+    if exception:
+        logger.error(f"Error in teardown_db: {exception}")
 
-def process_event_from_stock(body):
-    global ack_data
-    ack_data = body
 
 def close_db_connection():
-    db.close()
-
+    with app.app_context():
+        db =get_db()
+        db.close()
 
 atexit.register(close_db_connection)
 
@@ -50,6 +58,7 @@ class OrderValue(Struct):
 def get_order_from_db(order_id: str) -> OrderValue | None: ###Does not need to get transferred
     try:
         # get serialized data
+        db=get_db()
         entry: bytes = db.get(order_id)
     except redis.exceptions.RedisError:
         return abort(400, DB_ERROR_STR)
@@ -68,6 +77,7 @@ def create_order(data): #### ENDPOINT TRANSFERRED TO ORCHESTRATOR
 
     value = msgpack.encode(OrderValue(paid=False, items=[], user_id=user_id, total_cost=0))
     try:
+        db = get_db()
         db.set(key, value)
         logger.info(f"Order created: {key}, for user {user_id}")
         publish_event('events_orchestrator', 'CreateOrder', {'correlation_id': key, 'status': 'succeed'})
@@ -98,6 +108,7 @@ def batch_init_users(data):
     kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(generate_entry())
                                   for i in range(n)}
     try:
+        db = get_db()
         db.mset(kv_pairs)
         logger.info("Batch init for orders successful")
         publish_event('events_orchestrator', 'BatchInit', {'status': 'succeed',"correlation_id": "BatchInitOrders"})
@@ -160,6 +171,7 @@ def add_item(data): #### ENDPOINT TRANSFERRED TO ORCHESTRATOR
     order_entry.items.append((item_id, int(quantity)))
     order_entry.total_cost += int(quantity) * price
     try:
+        db = get_db()
         db.set(order_id, msgpack.encode(order_entry))
         logger.info(f"Item: {item_id} added to: {order_id} price updated to: {order_entry.total_cost}")
         publish_event('events_orchestrator', 'ItemAdded', {'correlation_id': order_id, 'status': 'succeed','total_cost': order_entry.total_cost})
@@ -208,6 +220,7 @@ def handle_payment_successful(data):
     order_entry: OrderValue = get_order_from_db(order_id)
     order_entry.paid = True
     try:
+        db = get_db()
         db.set(order_id, msgpack.encode(order_entry))
         logger.info(f"Payment successful for order {order_id}")
     except redis.exceptions.RedisError:
@@ -219,6 +232,7 @@ def handle_payment_failed(data):
     order_entry: OrderValue = get_order_from_db(order_id)
     order_entry.paid = False
     try:
+        db = get_db()
         db.set(order_id, msgpack.encode(order_entry))
         logger.info(f"Payment failed for order {order_id}")
         publish_event('events_orchestrator', 'Checkout', {'correlation_id': order_id, 'status': 'failed'})
@@ -247,31 +261,32 @@ def handle_stock_failed(data):
 
 
 def process_event(ch, method, properties, body):
-    event = json.loads(body)
-    event_type = event['type']
-    data = event['data']
-    if event_type == 'OrderCreation':
-        create_order(data)
-    if event_type == 'AddItem':
-        add_item(data)
-    if event_type == 'Checkout':
-        checkout(data)
-    if event_type == 'RefundIssued':
-        handle_issue_refund(data)
-    if event_type == 'PaymentSuccessfulOrder':
-        handle_payment_successful(data)
-    elif event_type == 'PaymentFailed':
-        handle_payment_failed(data)
-    elif event_type == 'StockReserved':
-        handle_stock_reserved(data)
-    elif event_type == 'StockFailed':
-        handle_stock_failed(data)
-    elif event_type == 'AddItemCheck':
-        handle_add_item_check(data)
-    elif event_type == 'BatchInit':
-        batch_init_users(data)
-    elif event_type == 'FindOrder':
-        find_order(data)
+    with app.app_context():
+        event = json.loads(body)
+        event_type = event['type']
+        data = event['data']
+        if event_type == 'OrderCreation':
+            create_order(data)
+        if event_type == 'AddItem':
+            add_item(data)
+        if event_type == 'Checkout':
+            checkout(data)
+        if event_type == 'RefundIssued':
+            handle_issue_refund(data)
+        if event_type == 'PaymentSuccessfulOrder':
+            handle_payment_successful(data)
+        elif event_type == 'PaymentFailed':
+            handle_payment_failed(data)
+        elif event_type == 'StockReserved':
+            handle_stock_reserved(data)
+        elif event_type == 'StockFailed':
+            handle_stock_failed(data)
+        elif event_type == 'AddItemCheck':
+            handle_add_item_check(data)
+        elif event_type == 'BatchInit':
+            batch_init_users(data)
+        elif event_type == 'FindOrder':
+            find_order(data)
 
 
 
