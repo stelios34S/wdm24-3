@@ -141,11 +141,11 @@ def add_item(order_id: str, item_id: str, quantity: int):
 def batch_init_users_orders(n: int, n_items: int, n_users: int, item_price: int):
     # logger.info(f"Batch init  n: {n}, n_items: {n_items}, n_users: {n_users}, item_price: {item_price}")
     try:
-
-        data = {"n": int(n), "n_items": int(n_items), "n_users": int(n_users), "item_price": int(item_price)}
+        key = str(uuid.uuid4())
+        data = {"n": int(n), "n_items": int(n_items), "n_users": int(n_users), "item_price": int(item_price),"key":key}
         publish_event("events_order", "BatchInit", data)
-        start_subscriber('events_orchestrator', process_event, "BatchInitOrders")
-        ack_data = retrieve_ack("BatchInitOrders")
+        start_subscriber('events_orchestrator', process_event, "BatchInitOrders"+key)
+        ack_data = retrieve_ack("BatchInitOrders"+key)
         if ack_data.get('type') == 'BatchInit' and ack_data['data'].get('status') == 'succeed':
             logger.info("Batch init for orders successful")
             return Response("Batch init successful", status=200)
@@ -248,11 +248,11 @@ def remove_credit(user_id: str, amount: int):
 def batch_init_users_payment(n: int, starting_money: int):
     try:
 
-        ack_data = None
-        data = {"n": int(n), "starting_money": int(starting_money)}
+        key = str(uuid.uuid4())
+        data = {"n": int(n), "starting_money": int(starting_money), "key": key}
         publish_event("events_payment", "BatchInit", data)
-        start_subscriber('events_orchestrator', process_event, "BatchInitPayment")
-        ack_data = retrieve_ack("BatchInitPayment")
+        start_subscriber('events_orchestrator', process_event, "BatchInitPayment"+key)
+        ack_data = retrieve_ack("BatchInitPayment"+key)
         if ack_data.get('type') == 'BatchInit' and ack_data['data'].get('status') == 'succeed':
             logger.info("Batch init for payment successful")
             return Response("Batch init successful", status=200)
@@ -369,11 +369,11 @@ def find_item(item_id: str):
 def batch_init_users_stock(n: int, starting_stock: int, item_price: int):
     try:
 
-        ack_data = None
-        data = {"n": int(n), "starting_stock": int(starting_stock), "item_price": int(item_price)}
+        key = str(uuid.uuid4())
+        data = {"n": int(n), "starting_stock": int(starting_stock), "item_price": int(item_price), "key": key}
         publish_event("events_stock", "BatchInit", data)
-        start_subscriber('events_orchestrator', process_event, "BatchInitStock")
-        ack_data = retrieve_ack("BatchInitStock")
+        start_subscriber('events_orchestrator', process_event, "BatchInitStock"+key)
+        ack_data = retrieve_ack("BatchInitStock"+key)
         if ack_data.get('type') == 'BatchInit' and ack_data['data'].get('status') == 'succeed':
             logger.info("Batch init for stock successful")
             return Response("Batch init successful", status=200)

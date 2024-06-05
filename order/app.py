@@ -92,7 +92,7 @@ def batch_init_users(data):
     n_items = data['n_items']
     n_users = data['n_users']
     item_price = data['item_price']
-
+    key = data['key']
     # logger.info(f"Batch init  n: {n}, n_items: {n_items}, n_users: {n_users}, item_price: {item_price}")
     def generate_entry() -> OrderValue:
         user_id = random.randint(0, n_users - 1)
@@ -110,9 +110,9 @@ def batch_init_users(data):
         db = get_db()
         db.mset(kv_pairs)
         logger.info("Batch init for orders successful")
-        publish_event('events_orchestrator', 'BatchInit', {'status': 'succeed',"correlation_id": "BatchInitOrders"})
+        publish_event('events_orchestrator', 'BatchInit', {'status': 'succeed',"correlation_id": "BatchInitOrders"+key})
     except redis.exceptions.RedisError:
-        publish_event('events_orchestrator', 'BatchInit', {'status': 'failed', "correlation_id": "BatchInitOrders"})
+        publish_event('events_orchestrator', 'BatchInit', {'status': 'failed', "correlation_id": "BatchInitOrders"+key})
         abort(400, DB_ERROR_STR)
 
 

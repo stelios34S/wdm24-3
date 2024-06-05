@@ -88,6 +88,7 @@ def create_item(data): ####Transfered to orchestrator
 #@app.post('/batch_init/<n>/<starting_stock>/<item_price>')
 def batch_init_users(data):
     n = data["n"]
+    key = data["key"]
     starting_stock = data['starting_stock']
     item_price = data['item_price']
     kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(StockValue(stock=starting_stock, price=item_price))
@@ -95,9 +96,9 @@ def batch_init_users(data):
     try:
         db = get_db()
         db.mset(kv_pairs)
-        publish_event('events_orchestrator', 'BatchInit', {'correlation_id': "BatchInitStock", 'status': 'succeed'})
+        publish_event('events_orchestrator', 'BatchInit', {'correlation_id': "BatchInitStock"+key, 'status': 'succeed'})
     except redis.exceptions.RedisError:
-        publish_event('events_orchestrator', 'BatchInit', {'correlation_id': "BatchInitStock", 'status': 'failed'})
+        publish_event('events_orchestrator', 'BatchInit', {'correlation_id': "BatchInitStock"+key, 'status': 'failed'})
         abort(400, DB_ERROR_STR)
 
 
