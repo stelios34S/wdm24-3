@@ -96,12 +96,11 @@ def find_item(data):
     order_id = data['order_id']
     item_id = data['item_id']
     quantity = data['quantity']
-    logger.info("I WAS HIT")
     try:
         item_entry: StockValue = get_item_from_db(item_id)
         publish_event("events_order", "AddItem", {"item_id": item_id, "order_id": order_id, "quantity": quantity, "price": item_entry.price,"status": "succeed"})
     except redis.exceptions.RedisError:
-        publish_event("events_order", "AddItem", {"item_id": item_id, "order_id": order_id, "quantity": quantity, "price": item_entry.price ,"status": "failed"})
+        publish_event("events_order", "AddItem", {"item_id": item_id, "order_id": order_id, "quantity": quantity ,"status": "failed"})
         abort(400, DB_ERROR_STR)
 
 

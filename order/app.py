@@ -150,7 +150,10 @@ def add_item(data): #### ENDPOINT TRANSFERRED TO ORCHESTRATOR
     order_id = data['order_id']
     item_id = data['item_id']
     quantity = data['quantity']
-    price = data['price']
+    if data['price']:
+        price = data['price']
+    else:
+        price = 0
     status = data['status']
     order_entry: OrderValue = get_order_from_db(order_id)
     #start_subscriber_oneoff('events_order', process_event, item_id)
