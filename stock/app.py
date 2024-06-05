@@ -174,7 +174,7 @@ def handle_payment_successful(data):
 def process_event(ch, method, properties, body):
     event = json.loads(body)
     event_type = event['type']
-    data = event['data']
+    data = json.loads(event['data'])
     if event_type == 'PaymentSuccessfulStock':
         handle_payment_successful(data)
     if event_type == 'CreateItem':

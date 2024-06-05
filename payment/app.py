@@ -187,7 +187,7 @@ def process_event(ch, method, properties, body):
     event = json.loads(body)
     event_type = event['type']
     app.logger.info(event_type)
-    data = event['data']
+    data = json.loads(event['data'])
     if event_type == "ProcessPayment":
         handle_process_payment(data)
     elif event_type == "IssueRefund":
